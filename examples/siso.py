@@ -43,10 +43,5 @@ mysiso = siso.SISO(title, mycas)
 mysiso.kernel()
 
 ang_mom = mysiso.orbital_ang_mom()
-print('ang_mom', ang_mom[0, 1])
-
 eigval, eigvec = np.linalg.eigh(mysiso.SOC_Hamiltonian)
-
 eig_state_ang_mom = np.einsum('pm, mni, nq->pqi', eigvec, ang_mom, eigvec)
-
-print(eig_state_ang_mom[0, 0])

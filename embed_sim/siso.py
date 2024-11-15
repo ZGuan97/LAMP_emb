@@ -123,8 +123,7 @@ class SISO():
                 self.full_trans_dm[np.ix_(self.siso_state_idx[S, MS], self.siso_state_idx[S, MS])] = t_dm1
         return self.full_trans_dm
     
-    def orbital_ang_mom_fast(self):
-        print('fast version')
+    def orbital_ang_mom(self):
         mol = self.mol
         origin = mol.atom_coord(0)
         mol.set_common_origin(origin)
@@ -143,7 +142,7 @@ class SISO():
 
         return ang_mom
 
-    def orbital_ang_mom(self):
+    def orbital_ang_mom_old(self):
         mol = self.mol
         origin = mol.atom_coord(0)
         mol.set_common_origin(origin)
