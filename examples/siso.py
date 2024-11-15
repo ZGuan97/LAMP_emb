@@ -1,6 +1,6 @@
 import numpy as np
 from pyscf import scf
-from embed_sim import myavas, sacasscf_mixer
+from embed_sim import myavas, sacasscf_mixer, siso
 
 title = 'CoSH4'
 
@@ -34,15 +34,14 @@ mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
 
-ncas, nelec, mo = myavas.avas(mf, 'Co 3d', canonicalize=False)
+ncas, nelec, mo = myavas.avas(mf, 'Co 3d', threshold=0.5, minao='def2tzvp' ,canonicalize=False)
 
 mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
-cas_result = mycas.kernel(mo)
-# CASSCF energy = -2986.16051679323
-# CASCI E = -2986.16051679323  E(CI) = -19.6474414129580  S^2 = 1.3500000
-# CASCI state-averaged energy = -2986.16051679322
+mycas.kernel(mo)
 
-e_corr_casci = sacasscf_mixer.sacasscf_nevpt2_casci_ver(mycas)
-e_corr_undo = sacasscf_mixer.sacasscf_nevpt2_undo_ver(mycas)
+mysiso = siso.SISO(title, mycas)
+mysiso.kernel()
 
-print(np.allclose(e_corr_casci, e_corr_undo))
+ang_mom = mysiso.orbital_ang_mom()
+eigval, eigvec = np.linalg.eigh(mysiso.SOC_Hamiltonian)
+eig_state_ang_mom = np.einsum('pm, mni, nq->pqi', eigvec, ang_mom, eigvec)
