@@ -132,15 +132,37 @@ class SISO():
         mocore = self.mc.mo_coeff[:,:self.mc.ncore]
         dm1core = np.dot(mocore, mocore.conj().T)
 
+        # dm[p,q] = <|q^+ p|>
+
         ang_mom_core =np.einsum('ijk, jk->i', ang_mom_1e, dm1core)
         as_mo_tdm1 = self.make_full_trans_dm()
         mocas = self.mc.mo_coeff[:, self.mc.ncore: self.mc.ncore+self.mc.ncas]
         ang_mom_act_mo = np.einsum('ijk, ja, bk->abi', ang_mom_1e, mocas, mocas.conj().T)
 
-        ang_mom_act = np.einsum('abi, mnab->mni', ang_mom_act_mo, as_mo_tdm1)
+        ang_mom_act = np.einsum('abi, mnba->mni', ang_mom_act_mo, as_mo_tdm1)
         ang_mom = ang_mom_core + ang_mom_act
 
         return ang_mom
+    
+    def spin_ang_mom(self):
+        spin_ang_mom_ = np.zeros((3, self.nstates, self.nstates), dtype = complex)
+        for S in self.Slis:
+            for MS1 in range(-S, S+1, 2):
+                for MS2 in range(-S, S+1, 2):
+                        spin_ang_mom_[2][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 0, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2)
+
+                        spin_ang_mom_[0][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, -1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=-1
+
+                        spin_ang_mom_[1][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=1
+
+        spin_ang_mom = np.zeros((3,self.nstates, self.nstates), dtype = complex)
+        spin_ang_mom[0,:,:] = (spin_ang_mom_[0,:,:] - spin_ang_mom_[1,:,:]) / np.sqrt(2)
+        spin_ang_mom[1,:,:] = -1j * (spin_ang_mom_[0,:,:] + spin_ang_mom_[1,:,:]) / np.sqrt(2)
+        # here y component should have additional minus sign, but I don't know why
+        spin_ang_mom[2,:,:] = spin_ang_mom_[2,:,:]
+
+        spin_ang_mom = np.transpose(spin_ang_mom, axes=(1,2,0))
+        return spin_ang_mom
 
     def orbital_ang_mom_old(self):
         mol = self.mol
@@ -157,7 +179,7 @@ class SISO():
         ao_tdm1 = np.einsum('ia, mnab, bj->mnij', mocas, as_mo_tdm1, mocas.conj().T)
         tdm1 = dm1b + ao_tdm1
 
-        ang_mom = np.einsum('ijk, mnjk->mni', ang_mom_1e, tdm1)
+        ang_mom = np.einsum('ijk, mnkj->mni', ang_mom_1e, tdm1)
         return ang_mom
 
     def calc_z(self):
@@ -257,7 +279,7 @@ class SISO():
     def solve(self):
         myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
 
-        print('mag energy', (myeigval[:10]-min(myeigval))*219474.63)
+        print('mag energy', (myeigval[:20]-min(myeigval))*219474.63)
 
         for i in range(0, np.min((10, self.nstates))): # print 10 biggest coefficients and corresponding spin states
             coeff = myeigvec[:, i]
