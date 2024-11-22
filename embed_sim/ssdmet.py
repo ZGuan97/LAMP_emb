@@ -201,7 +201,7 @@ class SSDMET(lib.StreamObject):
         self.imp_idx = imp_idx
         self.threshold = thereshold
 
-        # not inputs
+        # NOT inputs
         self.fo_orb = None
         self.fv_orb = None
         self.es_orb = None
@@ -220,7 +220,23 @@ class SSDMET(lib.StreamObject):
     def make_es_int2e(self):
         return make_es_int2e(self.mf_or_cas, self.es_orb)
         
-    def build(self, imp_idx=None):
+    def build(self, chk_fname=None, imp_idx=None, save_chk=True):
+        if chk_fname is not None:
+            print(f'load chk file {chk_fname}')
+            with h5py.File(chk_fname, 'r') as fh5:
+                self.fo_orb = fh5['fo_orb'][:]
+                self.fv_orb = fh5['fv_orb'][:]
+                self.es_orb = fh5['es_orb'][:]
+                self.es_occ = fh5['es_occ'][:]
+                self.es_int1e = fh5['es_int1e'][:]
+                self.es_int2e = fh5['es_int2e'][:]
+
+            self.nfo = np.shape(self.fo_orb)[1]
+            self.nfv = np.shape(self.fv_orb)[1]
+            self.nes = np.shape(self.es_orb)[1]
+            
+            return 
+
         if imp_idx is not None:
             self.imp_idx = imp_idx
         caoes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(self.mf_or_cas, self.imp_idx, thres=self.threshold)
@@ -234,6 +250,16 @@ class SSDMET(lib.StreamObject):
 
         self.es_int1e = self.make_es_int1e()
         self.es_int2e = self.make_es_int2e()
+
+        dmet_chk_fname = self.title + '_dmet_chk.h5'
+        if save_chk:
+            with h5py.File(dmet_chk_fname, 'w') as fh5:
+                fh5['fo_orb'] = self.fo_orb
+                fh5['fv_orb'] = self.fv_orb
+                fh5['es_orb'] = self.es_orb
+                fh5['es_occ'] = self.es_occ
+                fh5['es_int1e'] = self.es_int1e
+                fh5['es_int2e'] = self.es_int2e
         return 
     
     def ROHF(self):
