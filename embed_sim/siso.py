@@ -147,6 +147,7 @@ class SISO():
     def spin_ang_mom(self):
         spin_ang_mom_ = np.zeros((3, self.nstates, self.nstates), dtype = complex)
         for S in self.Slis:
+            S = int(S)
             for MS1 in range(-S, S+1, 2):
                 for MS2 in range(-S, S+1, 2):
                         spin_ang_mom_[2][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 0, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2)
@@ -215,6 +216,8 @@ class SISO():
 
         mc = self.mc
         for S1, S2 in itertools.product(range(0, self.Smax), range(0, self.Smax)):
+            S1 = int(S1)
+            S2 = int(S2)
             if S1 == S2: # z_0 s_0
                 for I1, I2 in itertools.product(self.casscf_state_idx[S1],
                                                 self.casscf_state_idx[S2]):
@@ -244,6 +247,8 @@ class SISO():
     
     def calc_h(self):
         for S1, S2 in itertools.product(self.Slis, self.Slis):
+            S1 = int(S1)
+            S2 = int(S2)
             # if Stot1 <= Stot2:
             for MS1, MS2 in itertools.product(range(-S1, S1+1, 2),
                                               range(-S2, S2+1, 2)):
