@@ -1,5 +1,5 @@
 import numpy as np
-from math import comb
+from scipy.special import comb
 import itertools 
 from sympy.physics.wigner import wigner_3j
 
