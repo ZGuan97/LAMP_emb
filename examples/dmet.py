@@ -33,7 +33,6 @@ mf.level_shift = .1
 mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
-mf.make_rdm1()
 
 mydmet = ssdmet.SSDMET(mf, title=title)
 mydmet.imp_idx = mol.search_ao_label('Co *')

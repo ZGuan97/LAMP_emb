@@ -30,13 +30,15 @@ chk_fname = title + '_rohf.chk'
 mf.chkfile = chk_fname
 mf.init_guess = 'chk'
 mf.level_shift = .1
-mf.max_cycle = 0
+mf.max_cycle = 1
 mf.max_memory = 100000
 mf.kernel()
 
-# mydmet = ssdmet.SSDMET(mf, title=title)
-# mydmet.imp_idx = mol.search_ao_label('Co *')
-# mydmet.build(save_chk=True) # save_chk=True by default, but the dmet_chk file can be large
-
 mydmet = ssdmet.SSDMET(mf, title=title)
+mydmet.imp_idx = mol.search_ao_label('Co *')
+mydmet.build(save_chk=True) 
+# save_chk=True by default, but the dmet_chk file can be large
+
+mydmet = ssdmet.SSDMET(mf, title=title, threshold=1e-5)
 mydmet.build(chk_fname=title+'_dmet_chk.h5')
+# chk will be used only if density matrix, impurity and threshold check is passed so that embedding can be reproduced exactly
