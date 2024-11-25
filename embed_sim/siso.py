@@ -77,7 +77,7 @@ class SISO():
         self.casscf_state_idx = [np.arange(np.sum(self.statelis[0: S]),
                                            np.sum(self.statelis[0: S+1])) for S in range(0, self.Smax)]
         
-        self.accu_statelis_mul = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int) # acumulated statelis with respect to spin multiplicity
+        self.accu_statelis_mul = np.concatenate((np.zeros(1, dtype=int), np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1))), dtype=int))) # acumulated statelis with respect to spin multiplicity)
 
         self.siso_state_idx = {}
         for S in range(0, self.Smax):
@@ -264,7 +264,8 @@ class SISO():
     
     def reshape_old(self): # for check with Yuhang's code
         # print('reshape_old')
-        accu_range = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int)
+        accu_range = np.concatenate((np.zeros(1, dtype=int), np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1))), dtype=int))) # acumulated statelis with respect to spin multiplicity)
+        # accu_range = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int)
         arg = []
         for spin in range(0, self.Smax):
             # print('spin', spin)
