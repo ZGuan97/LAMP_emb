@@ -5,7 +5,6 @@ import h5py
 
 from pyscf.lo.orth import lowdin
 from pyscf import gto, scf, mcscf, ao2mo
-from pyscf.scf.hf import get_jk
 
 import os
 
@@ -302,7 +301,8 @@ class SSDMET(lib.StreamObject):
         # assume we only perfrom ROHF-in-ROHF embedding
 
         # assert np.einsum('ijj->', es_dm) == mol.nelectron
-        # es_mf.kernel(es_dm)
+        es_mf.kernel(es_dm)
+        self.es_occ = es_mf.mo_occ
         return es_mf
     
     def avas(self, aolabels, **kwargs):
