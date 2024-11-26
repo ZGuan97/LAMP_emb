@@ -1,5 +1,5 @@
 import numpy as np
-from math import comb
+from scipy.special import comb
 
 def Weyl_nstate(ncas, nelecas, spin): # definition of S is the same as that in pyscf.mol, equal to 2S actually
     if (nelecas - spin)%2 == 0: 

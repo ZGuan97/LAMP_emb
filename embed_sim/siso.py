@@ -1,5 +1,5 @@
 import numpy as np
-from math import comb
+from scipy.special import comb
 import itertools 
 from sympy.physics.wigner import wigner_3j
 
@@ -77,7 +77,7 @@ class SISO():
         self.casscf_state_idx = [np.arange(np.sum(self.statelis[0: S]),
                                            np.sum(self.statelis[0: S+1])) for S in range(0, self.Smax)]
         
-        self.accu_statelis_mul = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int) # acumulated statelis with respect to spin multiplicity
+        self.accu_statelis_mul = np.concatenate((np.zeros(1, dtype=int), np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1))), dtype=int))) # acumulated statelis with respect to spin multiplicity)
 
         self.siso_state_idx = {}
         for S in range(0, self.Smax):
@@ -107,7 +107,7 @@ class SISO():
         S = np.arange(self.Smax+1)[self.accu_statelis_mul>idx][0]-1
         MS = (idx - self.accu_statelis_mul[S])//self.statelis[S] * 2 - S
         alpha = (idx - self.accu_statelis_mul[S])%self.statelis[S]
-        return S, MS, alpha
+        return np.array([S, MS, alpha], dtype=int)
     
     def make_full_trans_dm(self):
         np.save('mo_coeff', self.mc.mo_coeff)
@@ -264,7 +264,8 @@ class SISO():
     
     def reshape_old(self): # for check with Yuhang's code
         # print('reshape_old')
-        accu_range = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int)
+        accu_range = np.concatenate((np.zeros(1, dtype=int), np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1))), dtype=int))) # acumulated statelis with respect to spin multiplicity)
+        # accu_range = np.fromiter(itertools.accumulate(self.statelis * (np.arange(1, self.Smax+1)), initial=0), dtype=int)
         arg = []
         for spin in range(0, self.Smax):
             # print('spin', spin)
@@ -281,17 +282,18 @@ class SISO():
         old_Hal = self.SOC_Hamiltonian[inv][:, inv]
         np.savetxt('old_Hal', old_Hal)
 
-    def solve(self):
+    def solve(self, nprint=4, ncomp=10):
         myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
 
         print('mag energy', (myeigval[:20]-min(myeigval))*219474.63)
 
-        for i in range(0, np.min((10, self.nstates))): # print 10 biggest coefficients and corresponding spin states
+        for i in range(0, np.min((nprint, self.nstates))): # print 10 biggest coefficients and corresponding spin states
             coeff = myeigvec[:, i]
             arg_sort_coeff = np.argsort(-np.abs(coeff))
             print('state', i)
-            for j in range(0, 10):
-                print('(S, MS, I)', self.idx2state(arg_sort_coeff[j]), 'coeff', coeff[arg_sort_coeff[j]], '|coeff| ** 2', np.linalg.norm(coeff[arg_sort_coeff[j]])**2)
+            for j in range(0, ncomp):
+                with np.printoptions(precision=3, suppress=True):
+                    print(f'(S, MS, I), {self.idx2state(arg_sort_coeff[j])}\t coeff\t {coeff[arg_sort_coeff[j]]:.3f}\t |coeff| ** 2\t {np.linalg.norm(coeff[arg_sort_coeff[j]])**2:.3f}')
         return 
             
     def kernel(self):
