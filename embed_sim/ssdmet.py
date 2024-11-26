@@ -172,15 +172,19 @@ class SSDMET(lib.StreamObject):
     """
     single-shot DMET with impurity-environment partition
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=[], threshold=1e-13, max_mem=64000,verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, max_mem=64000,verbose=logger.INFO):
         self.mf_or_cas = mf_or_cas
+        self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = max_mem # TODO
         self.verbose = verbose # TODO
 
         # inputs
         self.dm = None
-        self.imp_idx = imp_idx
+        if imp_idx is not None:
+            self.imp_idx = imp_idx
+        else:
+            self.imp_idx = self.mol.search_ao_label(self.mol.atom_symbol(0))
         self.threshold = threshold
 
         # NOT inputs
@@ -244,7 +248,7 @@ class SSDMET(lib.StreamObject):
     
     def lowdin_orth(self):
         # lowdin orthonormalize
-        caolo, cloao = lowdin_orth(self.mf_or_cas.mol)
+        caolo, cloao = lowdin_orth(self.mol)
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
         
@@ -285,7 +289,7 @@ class SSDMET(lib.StreamObject):
         mol.verbose = self.verbose
         mol.incore_anyway = True
         mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
-        mol.spin = self.mf_or_cas.mol.spin
+        mol.spin = self.mol.spin
 
         es_mf = scf.rohf.ROHF(mol).x2c()
         es_mf.max_memory = self.max_mem
@@ -315,7 +319,7 @@ class SSDMET(lib.StreamObject):
         return ncas, nelec, es_mo 
     
     def total_mf(self):
-        total_mf = scf.rohf.ROHF(self.mf_or_cas.mol).x2c()
+        total_mf = scf.rohf.ROHF(self.mol).x2c()
         total_mf.mo_coeff = np.hstack((self.fo_orb, self.es_orb, self.fv_orb))
         total_mf.mo_occ = np.hstack((2*np.ones(self.nfo), self.es_occ, np.zeros(self.nfv)))
         return total_mf

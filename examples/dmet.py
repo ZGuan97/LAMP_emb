@@ -36,6 +36,7 @@ mf.kernel()
 
 mydmet = ssdmet.SSDMET(mf, title=title)
 mydmet.imp_idx = mol.search_ao_label('Co *')
+# if impurity is not assigned, the orbitals on first atom is chosen as impurity
 mydmet.build()
 
 es_mf = mydmet.ROHF()
