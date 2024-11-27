@@ -118,6 +118,12 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
 
     return cloes, nimp, nbath, nfo, nfv, es_occ #, entr - ent, asorbs
 
+def absorb_occ(mo_occ, threshold = 1e-8): 
+    # make those occpuation close to 2 or 0 to be integral 
+    mo_occ = np.where(np.abs(mo_occ-2)>threshold, mo_occ, int(2))
+    mo_occ = np.where(np.abs(mo_occ)>threshold, mo_occ, int(0))
+    return mo_occ
+
 def make_es_1e_ints_old(mf,caoas,asorbs):
     # hcore from mf
     hcore = mf.get_hcore()
@@ -156,13 +162,16 @@ def make_es_2e_ints_old(mf,caoas,asorbs):
     else:
         asints2e = ao2mo.full(mf.mol,caoas[:,act_inds])
 
+    asints2e = ao2mo.full(mf.mol,caoas[:,act_inds])
+
     return asints2e 
 
 def make_es_int2e(mf, es_orb):
-    if mf._eri is not None:
-        es_int2e = ao2mo.full(mf._eri, es_orb)
-    else:
-        es_int2e = ao2mo.full(mf.mol, es_orb)
+    # if mf._eri is not None:
+    #     es_int2e = ao2mo.full(mf._eri, es_orb)
+    # else:
+    #     es_int2e = ao2mo.full(mf.mol, es_orb)
+    es_int2e = ao2mo.full(mf.mol, es_orb)
     return es_int2e
 
 from pyscf import lib
@@ -207,10 +216,16 @@ class SSDMET(lib.StreamObject):
         return make_es_int2e(self.mf_or_cas, self.es_orb)
     
     def load_chk(self, chk_fname):
+        try:
+            if not os.path.isfile(chk_fname):
+                return False
+        except:
+            return False
+        
         print(f'load chk file {chk_fname}')
         with h5py.File(chk_fname, 'r') as fh5:
-            # TODO check 1-rdm for reproduciblity
-            dm_check = np.allclose(self.dm, fh5['dm'][:])
+            dm_check = np.allclose(self.dm, fh5['dm'][:], atol=1e-5)
+            dm_diff = np.max(np.abs(self.dm - fh5['dm'][:]))
             imp_idx_check = compare_imp_idx(self.imp_idx, fh5['imp_idx'][:])
             threshold_check = self.threshold == fh5['threshold'][()]
             if dm_check & imp_idx_check & threshold_check:
@@ -224,13 +239,14 @@ class SSDMET(lib.StreamObject):
                 self.nfo = np.shape(self.fo_orb)[1]
                 self.nfv = np.shape(self.fv_orb)[1]
                 self.nes = np.shape(self.es_orb)[1]
-                return
+                return True
             else:
                 print(f'density matrix check {dm_check}')
+                print(f'difference in density matrix {dm_diff}')
                 print(f'impurity index check {imp_idx_check}')
                 print(f'threshold check {threshold_check}')
                 print(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
-        return 
+                return False
     
     def save_chk(self, chk_fname):
         with h5py.File(chk_fname, 'w') as fh5:
@@ -252,39 +268,39 @@ class SSDMET(lib.StreamObject):
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
         
-    def build(self, chk_fname=None, imp_idx=None, save_chk=True):
+    def build(self, chk_fname_load=None, save_chk=True):
         self.dm = self.mf_or_cas.make_rdm1()
         if np.shape(np.shape(self.dm))[0] == 3: # ROHF density matrix have dimension (2, nao, nao)
             self.dm = self.dm[0] + self.dm[1]
 
-        if imp_idx is not None:
-            self.imp_idx = imp_idx
+        # if imp_idx is not None:
+        #     self.imp_idx = imp_idx
 
-        if chk_fname is not None:
-            self.load_chk(chk_fname)
-
-        ldm, caolo, cloao = self.lowdin_orth()
-
-        cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
-        caoes = caolo @ cloes
-
-        self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
-        self.fv_orb = caoes[:, nimp+nbath+nfo: nimp+nbath+nfo+nfv]
-        self.es_orb = caoes[:, :nimp+nbath]
+        loaded = self.load_chk(chk_fname_load)
         
-        self.nfo = nfo
-        self.nfv = nfv
-        self.nes = nimp + nbath
+        if not loaded:
+            ldm, caolo, cloao = self.lowdin_orth()
 
-        self.es_int1e = self.make_es_int1e()
-        self.es_int2e = self.make_es_int2e()
+            cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
+            caoes = caolo @ cloes
 
-        chk_fname = self.title + '_dmet_chk.h5'
+            self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
+            self.fv_orb = caoes[:, nimp+nbath+nfo: nimp+nbath+nfo+nfv]
+            self.es_orb = caoes[:, :nimp+nbath]
+        
+            self.nfo = nfo
+            self.nfv = nfv
+            self.nes = nimp + nbath
+
+            self.es_int1e = self.make_es_int1e()
+            self.es_int2e = self.make_es_int2e()
+
+        chk_fname_save = self.title + '_dmet_chk.h5'
         if save_chk:
-            self.save_chk(chk_fname)
+            self.save_chk(chk_fname_save)
         return 
     
-    def ROHF(self):
+    def ROHF(self, run_mf=False):
         mol = gto.M()
         mol.verbose = self.verbose
         mol.incore_anyway = True
@@ -305,17 +321,18 @@ class SSDMET(lib.StreamObject):
         # assume we only perfrom ROHF-in-ROHF embedding
 
         # assert np.einsum('ijj->', es_dm) == mol.nelectron
-        es_mf.kernel(es_dm)
-        self.es_occ = es_mf.mo_occ
+        if run_mf:
+            es_mf.kernel(es_dm)
+            self.es_occ = es_mf.mo_occ
         return es_mf
     
     def avas(self, aolabels, **kwargs):
         from embed_sim import myavas
         total_mf = self.total_mf()
-        ncas, nelec, mo = myavas.avas(total_mf, aolabels, ncore=self.nfo, nunocc = self.nfv, **kwargs)
+        total_mf.mo_occ = absorb_occ(total_mf.mo_occ)
+        ncas, nelec, mo = myavas.avas(total_mf, aolabels, ncore=self.nfo, nunocc = self.nfv, canonicalize=False, **kwargs) # canonicalize should be set to False, since it require orbital energy
 
-        es_mo = self.es_orb.T.conj() @ self.mf_or_cas.get_ovlp() @ mo[:, self.nfo: self.nfo+self.nes]
-        
+        es_mo = self.es_orb.T.conj() @ self.mol.intor_symmetric('int1e_ovlp') @ mo[:, self.nfo: self.nfo+self.nes]
         return ncas, nelec, es_mo 
     
     def total_mf(self):

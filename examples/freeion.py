@@ -49,7 +49,6 @@ print(J_sq[:10])
 print(9/2*(9/2+1))
 
 np.random.seed(0)
-Nsample = 80
 s = np.random.normal(0, 1, size=3)
 norm=np.sqrt(np.sum(s*s))
 direction=1/norm * s

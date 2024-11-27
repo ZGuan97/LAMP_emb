@@ -40,5 +40,5 @@ mydmet.build(save_chk=True)
 # save_chk=True by default, but the dmet_chk file can be large
 
 mydmet = ssdmet.SSDMET(mf, title=title, threshold=1e-5)
-mydmet.build(chk_fname=title+'_dmet_chk.h5')
+mydmet.build(chk_fname_load=title+'_dmet_chk.h5')
 # chk will be used only if density matrix, impurity and threshold check is passed so that embedding can be reproduced exactly
