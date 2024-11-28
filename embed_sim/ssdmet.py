@@ -118,8 +118,8 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
 
     return cloes, nimp, nbath, nfo, nfv, es_occ #, entr - ent, asorbs
 
-def absorb_occ(mo_occ, threshold = 1e-8): 
-    # make those occpuation close to 2 or 0 to be integral 
+def round_off_occ(mo_occ, threshold = 1e-8): 
+    # round off occpuation close to 2 or 0 to be integral 
     mo_occ = np.where(np.abs(mo_occ-2)>threshold, mo_occ, int(2))
     mo_occ = np.where(np.abs(mo_occ)>threshold, mo_occ, int(0))
     return mo_occ
@@ -209,6 +209,8 @@ class SSDMET(lib.StreamObject):
         self.es_int1e = None
         self.es_int2e = None
 
+        self.es_mf = None
+
     def make_es_int1e(self):
         return make_es_int1e(self.mf_or_cas, self.fo_orb, self.es_orb)
 
@@ -217,15 +219,16 @@ class SSDMET(lib.StreamObject):
     
     def load_chk(self, chk_fname):
         try:
+            if not '_dmet_chk.h5' in chk_fname:
+                chk_fname = chk_fname + '_dmet_chk.h5'
             if not os.path.isfile(chk_fname):
                 return False
         except:
             return False
-        
+
         print(f'load chk file {chk_fname}')
         with h5py.File(chk_fname, 'r') as fh5:
             dm_check = np.allclose(self.dm, fh5['dm'][:], atol=1e-5)
-            dm_diff = np.max(np.abs(self.dm - fh5['dm'][:]))
             imp_idx_check = compare_imp_idx(self.imp_idx, fh5['imp_idx'][:])
             threshold_check = self.threshold == fh5['threshold'][()]
             if dm_check & imp_idx_check & threshold_check:
@@ -242,7 +245,6 @@ class SSDMET(lib.StreamObject):
                 return True
             else:
                 print(f'density matrix check {dm_check}')
-                print(f'difference in density matrix {dm_diff}')
                 print(f'impurity index check {imp_idx_check}')
                 print(f'threshold check {threshold_check}')
                 print(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
@@ -268,13 +270,10 @@ class SSDMET(lib.StreamObject):
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
         
-    def build(self, chk_fname_load=None, save_chk=True):
+    def build(self, chk_fname_load='', save_chk=True):
         self.dm = self.mf_or_cas.make_rdm1()
         if np.shape(np.shape(self.dm))[0] == 3: # ROHF density matrix have dimension (2, nao, nao)
             self.dm = self.dm[0] + self.dm[1]
-
-        # if imp_idx is not None:
-        #     self.imp_idx = imp_idx
 
         loaded = self.load_chk(chk_fname_load)
         
@@ -298,7 +297,8 @@ class SSDMET(lib.StreamObject):
         chk_fname_save = self.title + '_dmet_chk.h5'
         if save_chk:
             self.save_chk(chk_fname_save)
-        return 
+        self.es_mf = self.ROHF()
+        return self.es_mf
     
     def ROHF(self, run_mf=False):
         mol = gto.M()
@@ -329,7 +329,7 @@ class SSDMET(lib.StreamObject):
     def avas(self, aolabels, **kwargs):
         from embed_sim import myavas
         total_mf = self.total_mf()
-        total_mf.mo_occ = absorb_occ(total_mf.mo_occ)
+        total_mf.mo_occ = round_off_occ(total_mf.mo_occ) # make 2/0 occupation to be int
         ncas, nelec, mo = myavas.avas(total_mf, aolabels, ncore=self.nfo, nunocc = self.nfv, canonicalize=False, **kwargs) # canonicalize should be set to False, since it require orbital energy
 
         es_mo = self.es_orb.T.conj() @ self.mol.intor_symmetric('int1e_ovlp') @ mo[:, self.nfo: self.nfo+self.nes]

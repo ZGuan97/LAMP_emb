@@ -46,7 +46,7 @@ eig_state_tot_ang_mom = np.einsum('pm, mni, nq->pqi', eigvec.conj().T, tot_ang_m
 J_sq = np.einsum('pqi, qpi->p', eig_state_tot_ang_mom, eig_state_tot_ang_mom)
 print('check J_tot')
 print(J_sq[:10])
-print(9/2*(9/2+1))
+print(f'ref {9/2*(9/2+1)}')
 
 np.random.seed(0)
 s = np.random.normal(0, 1, size=3)
@@ -70,4 +70,4 @@ S_num = 3/2
 L_num = 3
 J_num = 9/2
 gJ = 1 + (J_num*(J_num+1) + S_num*(S_num+1) - L_num*(L_num+1)) / (2*J_num*(J_num+1))
-print('gJ', gJ)
+print(f'ref gJ {gJ}')

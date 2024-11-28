@@ -34,7 +34,7 @@ mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
 
-ncas, nelec, mo = myavas.avas(mf, 'Co 3d', canonicalize=False)
+ncas, nelec, mo = myavas.avas(mf, 'Co 3d', minao='def2tzvp', openshell_option=3, threshold=0.5)
 
 mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
 cas_result = mycas.kernel(mo)
@@ -46,3 +46,12 @@ e_corr_casci = sacasscf_mixer.sacasscf_nevpt2_casci_ver(mycas)
 e_corr_undo = sacasscf_mixer.sacasscf_nevpt2_undo_ver(mycas)
 
 print(np.allclose(e_corr_casci, e_corr_undo))
+
+mycas.e_states += e_corr_undo
+
+# mycas.fcisolver = mycas.fcisolver.undo_state_average()
+# spin=3
+# from pyscf.fci.addons import _unpack_nelec
+# mycas.nelecas = _unpack_nelec(mycas.nelecas, spin)
+# mycas.fcisolver.spin = spin
+# mycas.analyze(ci = mycas.ci[40])

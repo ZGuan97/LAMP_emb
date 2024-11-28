@@ -39,13 +39,11 @@ mydmet.imp_idx = mol.search_ao_label('Co *')
 # if impurity is not assigned, the orbitals on first atom is chosen as impurity
 mydmet.build()
 
-es_mf = mydmet.ROHF()
-
-ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5, canonicalize=False)
+ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
 # a strange thing: using def2tzvp give smaller avas eigenvalues
 # and may involve virtual orbitals if we don't increase the threshold
 
-es_cas = sacasscf_mixer.sacasscf_mixer(es_mf, ncas, nelec)
+es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
 
 total_cas = mydmet.total_cas(es_cas)
