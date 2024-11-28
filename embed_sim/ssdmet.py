@@ -193,7 +193,7 @@ class SSDMET(lib.StreamObject):
         if imp_idx is not None:
             self.imp_idx = imp_idx
         else:
-            self.imp_idx = self.mol.search_ao_label(self.mol.atom_symbol(0))
+            self.imp_idx = self.mol.atom_symbol(0)
         self.threshold = threshold
 
         # NOT inputs
@@ -210,6 +210,14 @@ class SSDMET(lib.StreamObject):
         self.es_int2e = None
 
         self.es_mf = None
+
+    @property
+    def imp_idx(self):
+        return self._imp_idx
+    
+    @imp_idx.setter
+    def imp_idx(self, imp_idx):
+        self._imp_idx = gto.mole._aolabels2baslst(self.mol, imp_idx, base=0)
 
     def make_es_int1e(self):
         return make_es_int1e(self.mf_or_cas, self.fo_orb, self.es_orb)

@@ -34,9 +34,8 @@ mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
 
-mydmet = ssdmet.SSDMET(mf, title=title)
-mydmet.imp_idx = mol.search_ao_label('Co *')
-# if impurity is not assigned, the orbitals on first atom is chosen as impurity
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co *')
+# if impurity is not assigned, the orbitals on the first atom is chosen as impurity
 mydmet.build()
 
 ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)

@@ -285,15 +285,16 @@ class SISO():
     def solve(self, nprint=4, ncomp=10):
         myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
 
-        print('mag energy', (myeigval[:20]-min(myeigval))*219474.63)
-
+        mag_ene =  (myeigval-min(myeigval))*219474.63
+        
         for i in range(0, np.min((nprint, self.nstates))): # print 10 biggest coefficients and corresponding spin states
             coeff = myeigvec[:, i]
             arg_sort_coeff = np.argsort(-np.abs(coeff))
-            print('state', i)
+            print('state', i, 'energy', mag_ene[i])
             for j in range(0, ncomp):
                 with np.printoptions(precision=3, suppress=True):
                     print(f'(S, MS, I), {self.idx2state(arg_sort_coeff[j])}\t coeff\t {coeff[arg_sort_coeff[j]]:.3f}\t |coeff| ** 2\t {np.linalg.norm(coeff[arg_sort_coeff[j]])**2:.3f}')
+        print('mag energy', mag_ene[:20])
         return 
             
     def kernel(self):

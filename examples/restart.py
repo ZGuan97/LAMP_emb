@@ -34,8 +34,7 @@ mf.max_cycle = 1
 mf.max_memory = 100000
 mf.kernel()
 
-mydmet = ssdmet.SSDMET(mf, title=title)
-mydmet.imp_idx = mol.search_ao_label('Co *')
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co *')
 mydmet.build(save_chk=True) 
 # save_chk=True by default, but the dmet_chk file can be large
 
