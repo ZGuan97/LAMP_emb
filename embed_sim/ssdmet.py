@@ -190,6 +190,7 @@ class SSDMET(lib.StreamObject):
 
         # inputs
         self.dm = None
+        self._imp_idx = []
         if imp_idx is not None:
             self.imp_idx = imp_idx
         else:
