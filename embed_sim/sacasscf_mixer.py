@@ -86,7 +86,9 @@ def sacasscf_nevpt2_casci_ver(mc):
             nroot = nroots[i]
             for iroot in range(0, nroot):
                 print('spin', spin, 'iroot', iroot)
-                e_corr = mrpt.NEVPT(mc_ci, root=iroot).kernel()
+                nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
+                nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
+                e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
