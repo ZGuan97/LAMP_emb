@@ -45,6 +45,10 @@ ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
 
+es_ecorr = sacasscf_mixer.sacasscf_nevpt2_casci_ver(es_cas)
+for i in range(len(es_ecorr)):
+    es_cas.e_states[i] += es_ecorr[i]
+
 total_cas = mydmet.total_cas(es_cas)
 mysiso = siso.SISO(title, total_cas)
 mysiso.kernel()
