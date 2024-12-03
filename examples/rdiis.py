@@ -1,10 +1,10 @@
+# from liblan.utils import rdiis_old as rdiis
+from embed_sim import rdiis
+from pyscf import gto, scf
 import numpy as np
-from pyscf import scf
-from embed_sim import myavas, sacasscf_mixer, siso
 
 title = 'CoSH4'
 
-from pyscf import gto
 def get_mol(dihedral):
      mol = gto.M(atom = '''
                 Co             
@@ -24,24 +24,14 @@ def get_mol(dihedral):
 mol = get_mol(0)
 
 mf = scf.rohf.ROHF(mol).x2c()
+mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Co.*d']),power=0.2)
 
-chk_fname = title + '_rohf.chk'
-
-mf.chkfile = chk_fname
+mf.chkfile = title+'_rohf.chk'
 mf.init_guess = 'chk'
-mf.level_shift = .1
+mf.level_shift = 0
+mf.diis_space = 12
 mf.max_cycle = 1000
-mf.max_memory = 100000
+
+# mf.conv_tol=1e-11
+
 mf.kernel()
-
-ncas, nelec, mo = myavas.avas(mf, 'Co 3d', threshold=0.5, minao='def2tzvp')
-
-mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
-mycas.kernel(mo)
-
-mysiso = siso.SISO(title, mycas)
-mysiso.kernel()
-
-ang_mom = mysiso.orbital_ang_mom()
-eigval, eigvec = np.linalg.eigh(mysiso.SOC_Hamiltonian)
-eig_state_ang_mom = np.einsum('pm, mni, nq->pqi', eigvec, ang_mom, eigvec)

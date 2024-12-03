@@ -1,10 +1,9 @@
 import numpy as np
-from pyscf import scf
-from embed_sim import ssdmet, myavas, sacasscf_mixer, siso
+from pyscf import gto, scf
+from embed_sim import ssdmet, sacasscf_mixer, siso
 
 title = 'CoSH4'
 
-from pyscf import gto
 def get_mol(dihedral):
      mol = gto.M(atom = '''
                 Co             

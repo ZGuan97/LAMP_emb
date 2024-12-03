@@ -9,32 +9,7 @@ from pyscf.data import nist
 from functools import reduce
 from pyscf.fci import cistring
 
-def Weyl_nstate(ncas, nelecas, spin): # definition of S is the same as that in pyscf.mol, equal to 2S actually
-    if (nelecas - spin)%2 == 0: 
-        nstate = (spin+1)/(ncas+1) * comb(ncas+1, round(nelecas/2 - spin/2)) * comb(ncas+1, round(nelecas/2 + spin/2 + 1))
-    else:
-        nstate = 0
-    return round(nstate)
-
-def gen_statelis(ncas, nelecas):
-    # ncas: number of active orbitals
-    # nelecas: number of electron in active space
-    nelecas = np.sum(nelecas)
-    Smax = min(nelecas, 2*ncas-nelecas) # definition of S is same as that in molecule, equal to 2S actually
-    statelis = np.array([Weyl_nstate(ncas, nelecas, ispin) for ispin in range(0, Smax+1)])
-    return statelis
-
-def unpack_nelec(nelec, spin=None):
-    # from pyscf/fci/addons.py
-    if spin is None:
-        spin = 0
-    else:
-        nelec = int(np.sum(nelec))
-    if isinstance(nelec, (int, np.number)):
-        nelecb = (nelec-spin)//2
-        neleca = nelec - nelecb
-        nelec = neleca, nelecb
-    return nelec
+from embed_sim.spin_utils import gen_statelis, unpack_nelec
 
 def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 1
     # <bra|i_alpha^+ j_beta|ket> 
