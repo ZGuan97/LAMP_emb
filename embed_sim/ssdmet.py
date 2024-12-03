@@ -118,11 +118,57 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
 
     return cloes, nimp, nbath, nfo, nfv, es_occ #, entr - ent, asorbs
 
+def get_rdiis_property(ldm1s, imp_idx, rdiis_property='dS', thres=1e-13):
+    # for RDIIS
+    ldm = ldm1s[0]+ldm1s[1]
+    env_idx = [x for x in range(ldm.shape[0]) if x not in imp_idx]
+
+    ldm_env = ldm[env_idx,:][:,env_idx]
+
+    occ_env, orb_env = np.linalg.eigh(ldm_env)
+
+    ldma_env = ldm1s[0][env_idx,:][:,env_idx]
+    ldmb_env = ldm1s[1][env_idx,:][:,env_idx]
+
+    if rdiis_property == 'P':
+        pol = np.trace(ldma_env-ldmb_env)
+        return pol
+    
+    if rdiis_property == 'dS':
+        occ_enva, nat_coeffa = np.linalg.eigh(ldma_env)
+        occ_envb, nat_coeffb = np.linalg.eigh(ldmb_env)
+
+        occ_enva = occ_enva[occ_enva > thres]
+        occ_envb = occ_envb[occ_envb > thres]
+        occ_env = occ_env[occ_env > thres]
+        occ_enva = occ_enva[occ_enva < 1-thres]
+        occ_envb = occ_envb[occ_envb < 1-thres]
+        occ_env = occ_env[occ_env < 2-thres]
+        
+        ent = - np.sum(occ_enva*np.log(occ_enva)) - np.sum(occ_envb*np.log(occ_envb))
+        ent2 = - np.sum((1-occ_enva)*np.log(1-occ_enva)) - np.sum((1-occ_envb)*np.log(1-occ_envb))
+        entr = -2*np.sum(occ_env/2*np.log(occ_env/2))
+        entr2 = -2*np.sum((1-occ_env/2)*np.log(1-occ_env/2))
+        return entr - ent
+
+
+
 def round_off_occ(mo_occ, threshold = 1e-8): 
     # round off occpuation close to 2 or 0 to be integral 
     mo_occ = np.where(np.abs(mo_occ-2)>threshold, mo_occ, int(2))
+    mo_occ = np.where(np.abs(mo_occ-1)>threshold, mo_occ, int(1))
     mo_occ = np.where(np.abs(mo_occ)>threshold, mo_occ, int(0))
     return mo_occ
+
+def split_occ(mo_occ):
+    if mo_occ.ndim == 2:
+        return round_off_occ(mo_occ)
+    else:
+        mo_occ = round_off_occ(mo_occ)
+        split = np.zeros((2, np.shape(mo_occ)[0]))
+        split[0] = np.where(mo_occ-1>-1e-8, 1, 0)
+        split[1] = np.where(mo_occ-2>-1e-8, 1, 0)
+        return split
 
 def make_es_1e_ints_old(mf,caoas,asorbs):
     # hcore from mf
@@ -281,7 +327,7 @@ class SSDMET(lib.StreamObject):
         
     def build(self, chk_fname_load='', save_chk=True):
         self.dm = self.mf_or_cas.make_rdm1()
-        if np.shape(np.shape(self.dm))[0] == 3: # ROHF density matrix have dimension (2, nao, nao)
+        if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
             self.dm = self.dm[0] + self.dm[1]
 
         loaded = self.load_chk(chk_fname_load)
@@ -335,11 +381,11 @@ class SSDMET(lib.StreamObject):
             self.es_occ = es_mf.mo_occ
         return es_mf
     
-    def avas(self, aolabels, **kwargs):
+    def avas(self, aolabels, *args, **kwargs):
         from embed_sim import myavas
         total_mf = self.total_mf()
         total_mf.mo_occ = round_off_occ(total_mf.mo_occ) # make 2/0 occupation to be int
-        ncas, nelec, mo = myavas.avas(total_mf, aolabels, ncore=self.nfo, nunocc = self.nfv, canonicalize=False, **kwargs) # canonicalize should be set to False, since it require orbital energy
+        ncas, nelec, mo = myavas.avas(total_mf, aolabels, ncore=self.nfo, nunocc = self.nfv, canonicalize=False, *args, **kwargs) # canonicalize should be set to False, since it require orbital energy
 
         es_mo = self.es_orb.T.conj() @ self.mol.intor_symmetric('int1e_ovlp') @ mo[:, self.nfo: self.nfo+self.nes]
         return ncas, nelec, es_mo 

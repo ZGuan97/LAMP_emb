@@ -16,6 +16,18 @@ def gen_statelis(ncas, nelecas):
     statelis = np.array([Weyl_nstate(ncas, nelecas, ispin) for ispin in range(0, Smax+1)])
     return statelis
 
+def unpack_nelec(nelec, spin=None):
+    # from pyscf/fci/addons.py
+    if spin is None:
+        spin = 0
+    else:
+        nelec = int(np.sum(nelec))
+    if isinstance(nelec, (int, np.number)):
+        nelecb = (nelec-spin)//2
+        neleca = nelec - nelecb
+        nelec = neleca, nelecb
+    return nelec
+
 # For useful spin operators and Hamiltonians, visit documentation of EasySpin
 # https://easyspin.org/easyspin/documentation/index.html
 # Or sympy.physics.quantum.spin
