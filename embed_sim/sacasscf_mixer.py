@@ -7,6 +7,7 @@ import numpy as np
 from embed_sim import spin_utils
 
 def sacasscf_mixer(mf, ncas, nelec, statelis=None, fix_spin_shift=0.5):
+    # TODO wrap the solver by a class to have statelis as its property for SISO convenience
     solver = mcscf.CASSCF(mf,ncas,nelec)
 
     if statelis is None:
@@ -88,6 +89,7 @@ def sacasscf_nevpt2_casci_ver(mc):
                 print('spin', spin, 'iroot', iroot)
                 nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
+                nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 
                 e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
     else:
