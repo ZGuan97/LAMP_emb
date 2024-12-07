@@ -403,3 +403,12 @@ class SSDMET(lib.StreamObject):
         total_cas.ci = es_cas.ci
         total_cas.mo_coeff = np.hstack((self.fo_orb, self.es_orb @ es_cas.mo_coeff, self.fv_orb))
         return total_cas
+    
+    def fo_ene(self, e_nuc = True):
+        # energy of frozen occupied orbitals and nuclear-nuclear repulsion
+        dm_fo = self.mf_or_cas.make_rdm1(mo_coeff=self.fo_orb, mo_occ=np.ones((2, self.nfo)))
+        fo_ene = self.mf_or_cas.energy_elec(dm=dm_fo)[0]
+        if e_nuc:
+            e_nuc = self.mf_or_cas.energy_nuc()
+            fo_ene += e_nuc
+        return fo_ene
