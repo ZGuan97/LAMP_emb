@@ -48,10 +48,3 @@ e_corr_undo = sacasscf_mixer.sacasscf_nevpt2_undo_ver(mycas)
 print(np.allclose(e_corr_casci, e_corr_undo))
 
 mycas.e_states += e_corr_undo
-
-# mycas.fcisolver = mycas.fcisolver.undo_state_average()
-# spin=3
-# from pyscf.fci.addons import _unpack_nelec
-# mycas.nelecas = _unpack_nelec(mycas.nelecas, spin)
-# mycas.fcisolver.spin = spin
-# mycas.analyze(ci = mycas.ci[40])
