@@ -38,8 +38,6 @@ mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co *')
 mydmet.build()
 
 ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
-# a strange thing: using def2tzvp give smaller avas eigenvalues
-# and may involve virtual orbitals if we don't increase the threshold
 
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
