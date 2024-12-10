@@ -6,7 +6,7 @@ import numpy as np
 
 from embed_sim import spin_utils
 
-def sacasscf_mixer(mf, ncas, nelec, statelis=None, fix_spin_shift=0.5):
+def sacasscf_mixer(mf, ncas, nelec, statelis=None, weight = None, fix_spin_shift=0.5):
     # TODO wrap the solver by a class to have statelis as its property for SISO convenience
     solver = mcscf.CASSCF(mf,ncas,nelec)
 
@@ -36,7 +36,9 @@ def sacasscf_mixer(mf, ncas, nelec, statelis=None, fix_spin_shift=0.5):
             logger.info(solver,'%s states with spin multiplicity %s',statelis[i],i+1)
 
     statetot = np.sum(statelis)
-    mcscf.state_average_mix_(solver, solvers, np.ones(statetot)/statetot)
+    if weight is None:
+        weight = np.ones(statetot)/statetot
+    mcscf.state_average_mix_(solver, solvers, weight)
     return solver
 
 from pyscf.fci.addons import _unpack_nelec
