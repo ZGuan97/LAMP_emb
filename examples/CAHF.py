@@ -20,7 +20,7 @@ def get_mol(dihedral):
 mol = get_mol(0)
 
 from embed_sim import cahf, rdiis
-mf = cahf.CAHF(mol, 5, 7, 3).x2c()
+mf = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c()
 mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol.search_ao_label(['Co.*d']), power=0.2)
 
 mf.max_cycle=200
