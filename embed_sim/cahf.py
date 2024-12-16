@@ -7,12 +7,12 @@ def get_coeffs(ncas, nelecas, spin):
     na, nb = spin_utils.unpack_nelec(nelecas, spin)
     lambda_J = (ncas*nelecas*(nelecas-1)-2*na*nb) / (nelecas**2*(ncas-1))
     lambda_K = (ncas*nelecas*(nelecas-1)-2*ncas*na*nb) / (nelecas**2*(ncas-1))
-    a = lambda_J
-    b = lambda_K*2
+    coulomb_a = lambda_J
+    exchange_b = lambda_K*2
     f = nelecas / ncas / 2
-    alpha = (1-a)/(1-f)
-    beta = (1-b)/(1-f)
-    return f, alpha, beta
+    alpha = (1-coulomb_a)/(1-f)
+    beta = (1-exchange_b)/(1-f)
+    return f, coulomb_a, exchange_b, alpha, beta
 
 def CAHF_get_veff(f, a, b):
     def _get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
@@ -223,8 +223,7 @@ def CAHF_get_grad(f):
         return get_grad(mo_coeff, mo_occ, fock, f)
     return _get_grad
 
-def CAHF_energy_tot():
-    # TODO
+def CAHF_energy_elec(frac):
     def _energy_elec(mf, dm=None, h1e=None, vhf=None):
         '''Electronic energy of Unrestricted Hartree-Fock
 
@@ -242,15 +241,17 @@ def CAHF_energy_tot():
             vhf = mf.get_veff(mf.mol, dm)
         if h1e[0].ndim < dm[0].ndim:  # get [0] because h1e and dm may not be ndarrays
             h1e = (h1e, h1e)
-        e1 = np.einsum('ij,ji->', h1e[0], dm[0])
-        e1+= np.einsum('ij,ji->', h1e[1], dm[1])
-        e_coul =(np.einsum('ij,ji->', vhf[0], dm[0]) +
-                np.einsum('ij,ji->', vhf[1], dm[1])) * .5
+        e1 = np.einsum('ij,ji->', h1e[0], dm[0]) * 2 * frac
+        e1+= np.einsum('ij,ji->', h1e[1], dm[1]) * 2 * (1-frac)
+        e_coul =np.einsum('ij,ji->', vhf[0], dm[0]) * frac + \
+                np.einsum('ij,ji->', vhf[1], dm[1]) * (1-frac)
         e_elec = (e1 + e_coul).real
+
         mf.scf_summary['e1'] = e1.real
         mf.scf_summary['e2'] = e_coul.real
         logger.debug(mf, 'E1 = %s  Ecoul = %s', e1, e_coul.real)
         return e_elec, e_coul
+    return _energy_elec
 
 class CAHF(scf.rohf.ROHF):
     def __init__(self, mol, ncas, nelecas, spin):
@@ -259,7 +260,8 @@ class CAHF(scf.rohf.ROHF):
         self.ncas = ncas
         self.nelecas = nelecas
         self.spin = spin
-        self.frac, self.alpha, self.beta = get_coeffs(ncas, nelecas, spin)
+        self.frac, self.coulomb_a, self.exchange_b, self.alpha, self.beta = \
+            get_coeffs(ncas, nelecas, spin)
 
     def get_veff(self, *args, **kwargs):
         _get_veff = CAHF_get_veff(self.frac, self.alpha, self.beta)
@@ -276,6 +278,10 @@ class CAHF(scf.rohf.ROHF):
     def get_occ(self, *args, **kwargs):
         _get_occ = CAHF_get_occ(self.ncas, self.nelecas)
         return _get_occ(self, *args, **kwargs)
+    
+    def energy_elec(self, *args, **kwargs):
+        _energy_elec = CAHF_energy_elec(self.frac)
+        return _energy_elec(self, *args, **kwargs)
 
 
 if __name__ == '__main__':
