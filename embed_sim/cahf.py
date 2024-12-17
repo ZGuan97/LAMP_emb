@@ -253,9 +253,58 @@ def CAHF_energy_elec(frac):
         return e_elec, e_coul
     return _energy_elec
 
+def init_guess_by_chkfile(mol, chkfile_name, project=None):
+    '''
+    moditfy UHF.init_guess_by_chkfile
+    '''
+    from pyscf import gto
+    from pyscf.scf import addons, chkfile
+    import numpy, scipy
+    chk_mol, scf_rec = chkfile.load_scf(chkfile_name)
+    if project is None:
+        project = not gto.same_basis_set(chk_mol, mol)
+
+    # Check whether the two molecules are similar
+    im1 = scipy.linalg.eigvalsh(mol.inertia_moment())
+    im2 = scipy.linalg.eigvalsh(chk_mol.inertia_moment())
+    # im1+1e-7 to avoid 'divide by zero' error
+    if abs((im1-im2)/(im1+1e-7)).max() > 0.01:
+        logger.warn(mol, "Large deviations found between the input "
+                    "molecule and the molecule from chkfile\n"
+                    "Initial guess density matrix may have large error.")
+
+    if project:
+        s = hf.get_ovlp(mol)
+
+    def fproj(mo):
+        if project:
+            mo = addons.project_mo_nr2nr(chk_mol, mo, mol)
+            norm = numpy.einsum('pi,pi->i', mo.conj(), s.dot(mo))
+            mo /= numpy.sqrt(norm)
+        return mo
+
+    mo = scf_rec['mo_coeff']
+    mo_occ = scf_rec['mo_occ']
+    if getattr(mo[0], 'ndim', None) == 1:  # RHF
+        if numpy.iscomplexobj(mo):
+            raise NotImplementedError('TODO: project DHF orbital to UHF orbital')
+        mo_coeff = fproj(mo)
+        mo_occa = (mo_occ>1e-8).astype(numpy.double)
+        mo_occb = mo_occ - mo_occa
+        # dm = scf.rohf.make_rdm1([mo_coeff,mo_coeff], [mo_occa,mo_occb])
+        dm = scf.rohf.make_rdm1(mo_coeff, mo_occ)
+    else:  #UHF
+        if getattr(mo[0][0], 'ndim', None) == 2:  # KUHF
+            logger.warn(mol, 'k-point UHF results are found.  Density matrix '
+                        'at Gamma point is used for the molecular SCF initial guess')
+            mo = mo[0]
+        dm = scf.rohf.make_rdm1([fproj(mo[0]),fproj(mo[1])], mo_occ)
+    return dm
+
 class CAHF(scf.rohf.ROHF):
     def __init__(self, mol, ncas, nelecas, spin):
         hf.SCF.__init__(self, mol)
+        self.conv_check = False
         self.nelec = None
         self.ncas = ncas
         self.nelecas = nelecas
@@ -282,6 +331,10 @@ class CAHF(scf.rohf.ROHF):
     def energy_elec(self, *args, **kwargs):
         _energy_elec = CAHF_energy_elec(self.frac)
         return _energy_elec(self, *args, **kwargs)
+    
+    def init_guess_by_chkfile(self, chkfile=None, project=None):
+        if chkfile is None: chkfile = self.chkfile
+        return init_guess_by_chkfile(self.mol, chkfile, project=project)
 
 
 if __name__ == '__main__':
