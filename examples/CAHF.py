@@ -24,5 +24,5 @@ mf = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c()
 mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol.search_ao_label(['Co.*d']), power=0.2)
 
 mf.max_cycle=200
-mf.level_shift = 0.2
+mf.level_shift = 0.5 # larger level shift should be used to improve convergence, especially when dealing with lanthanide systems
 mf.kernel()
