@@ -1,10 +1,6 @@
 import numpy as np
-from pyscf import scf
-from embed_sim import myavas, sacasscf_mixer
+from pyscf import gto, scf
 
-title = 'CoSH4'
-
-from pyscf import gto
 def get_mol(dihedral):
      mol = gto.M(atom = '''
                 Co             
@@ -23,28 +19,10 @@ def get_mol(dihedral):
 
 mol = get_mol(0)
 
-mf = scf.rohf.ROHF(mol).x2c()
+from embed_sim import cahf, rdiis
+mf = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c()
+mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol.search_ao_label(['Co.*d']), power=0.2)
 
-chk_fname = title + '_rohf.chk'
-
-mf.chkfile = chk_fname
-mf.init_guess = 'chk'
-mf.level_shift = .1
-mf.max_cycle = 1000
-mf.max_memory = 100000
+mf.max_cycle=200
+mf.level_shift = 0.5 # larger level shift should be used to improve convergence, especially when dealing with lanthanide systems
 mf.kernel()
-
-ncas, nelec, mo = myavas.avas(mf, 'Co 3d', minao='def2tzvp', openshell_option=3, threshold=0.5)
-
-mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
-cas_result = mycas.kernel(mo)
-# CASSCF energy = -2986.16051679323
-# CASCI E = -2986.16051679323  E(CI) = -19.6474414129580  S^2 = 1.3500000
-# CASCI state-averaged energy = -2986.16051679322
-
-e_corr_casci = sacasscf_mixer.sacasscf_nevpt2_casci_ver(mycas)
-e_corr_undo = sacasscf_mixer.sacasscf_nevpt2_undo_ver(mycas)
-
-print(np.allclose(e_corr_casci, e_corr_undo))
-
-mycas.e_states += e_corr_undo
