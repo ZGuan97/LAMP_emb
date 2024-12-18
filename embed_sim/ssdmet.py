@@ -151,8 +151,6 @@ def get_rdiis_property(ldm1s, imp_idx, rdiis_property='dS', thres=1e-13):
         entr2 = -2*np.sum((1-occ_env/2)*np.log(1-occ_env/2))
         return entr - ent
 
-
-
 def round_off_occ(mo_occ, threshold = 1e-8): 
     # round off occpuation close to 2 or 0 to be integral 
     mo_occ = np.where(np.abs(mo_occ-2)>threshold, mo_occ, int(2))
@@ -373,6 +371,8 @@ class SSDMET(lib.StreamObject):
         es_dm = np.zeros((2, self.nes, self.nes))
         es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
         es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
+        es_mf.mo_coeff = np.eye(self.nes)
+
         # assume we only perfrom ROHF-in-ROHF embedding
 
         # assert np.einsum('ijj->', es_dm) == mol.nelectron
