@@ -41,6 +41,9 @@ def sacasscf_mixer(mf, ncas, nelec, statelis=None, weight = None, fix_spin_shift
     mcscf.state_average_mix_(solver, solvers, weight)
     return solver
 
+def sacasscf_nevpt2(mc):
+    return sacasscf_nevpt2_casci_ver(mc)
+
 from pyscf.fci.addons import _unpack_nelec
 def sacasscf_nevpt2_undo_ver(mc):
     from pyscf.mcscf.addons import StateAverageFCISolver
@@ -60,13 +63,15 @@ def sacasscf_nevpt2_undo_ver(mc):
             nroot = nroots[i]
             for iroot in range(0, nroot):
                 print('spin', spin, 'iroot', iroot)
-                e_corr = mrpt.NEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int)).kernel()
+                nevpt2 = mrpt.NEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
+                nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
+                e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
         print('redo state_average')
         mc.fcisolver = sa_fcisolver
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
-    return e_corrs
+    return np.array(e_corrs)
 
 def sacasscf_nevpt2_casci_ver(mc):
     print('sacasscf_nevpt2_casci_ver')
@@ -91,9 +96,9 @@ def sacasscf_nevpt2_casci_ver(mc):
                 print('spin', spin, 'iroot', iroot)
                 nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
-                nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 
+                # nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 
                 e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
-    return e_corrs
+    return np.array(e_corrs)

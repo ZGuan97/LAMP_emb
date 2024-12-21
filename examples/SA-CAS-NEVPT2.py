@@ -38,13 +38,16 @@ ncas, nelec, mo = myavas.avas(mf, 'Co 3d', minao='def2tzvp', openshell_option=3,
 
 mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
 cas_result = mycas.kernel(mo)
-# CASSCF energy = -2986.16051679323
-# CASCI E = -2986.16051679323  E(CI) = -19.6474414129580  S^2 = 1.3500000
-# CASCI state-averaged energy = -2986.16051679322
 
-e_corr_casci = sacasscf_mixer.sacasscf_nevpt2_casci_ver(mycas)
-e_corr_undo = sacasscf_mixer.sacasscf_nevpt2_undo_ver(mycas)
+e_corr = sacasscf_mixer.sacasscf_nevpt2(mycas)
+mycas.fcisolver.e_states += mycas.fcisolver.e_states + e_corr
 
-print(np.allclose(e_corr_casci, e_corr_undo))
+from embed_sim import siso
+mysiso = siso.SISO(title, mycas)
+mysiso.kernel()
 
-mycas.e_states += e_corr_undo
+# mag energy [0.00000000e+00 7.98444053e-07 4.10414077e+01 4.10414083e+01
+#  1.87934141e+03 1.87934141e+03 2.06515993e+03 2.06515993e+03
+#  3.39027868e+03 3.39027868e+03 3.40411780e+03 3.40411780e+03
+#  3.45165209e+03 3.45165209e+03 3.60460659e+03 3.60460659e+03
+#  4.95655679e+03 4.95655679e+03 5.38374012e+03 5.38374012e+03]
