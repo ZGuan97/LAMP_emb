@@ -41,6 +41,17 @@ def sacasscf_mixer(mf, ncas, nelec, statelis=None, weight = None, fix_spin_shift
     mcscf.state_average_mix_(solver, solvers, weight)
     return solver
 
+def read_statelis(mc):
+    spins = []
+    nroots = []
+    for solver in mc.fcisolver.fcisolvers:
+        spins.append(solver.spin)
+        nroots.append(solver.nroots)
+    max_spin = np.max(np.array(spins))
+    statelis = np.zeros(max_spin + 1, dtype=int)
+    statelis[spins] = nroots
+    return statelis
+
 def sacasscf_nevpt2(mc):
     return sacasscf_nevpt2_casci_ver(mc)
 

@@ -10,6 +10,7 @@ from functools import reduce
 from pyscf.fci import cistring
 
 from embed_sim.spin_utils import gen_statelis, unpack_nelec
+from embed_sim.sacasscf_mixer import read_statelis
 
 def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 1
     # <bra|i_alpha^+ j_beta|ket> 
@@ -43,9 +44,10 @@ class SISO():
         self.mol = mc.mol
         self.mc = mc
 
-        if statelis is None:
-            statelis = gen_statelis(self.mc.ncas, self.mc.nelecas)
-        self.statelis = np.asarray(statelis, dtype=int)
+        # if statelis is None:
+        #     statelis = gen_statelis(self.mc.ncas, self.mc.nelecas)
+        # self.statelis = np.asarray(statelis, dtype=int)
+        self.statelis = read_statelis(mc)
         self.Smax = np.shape(self.statelis)[0]
         self.Slis = np.nonzero(self.statelis)[0]
 
