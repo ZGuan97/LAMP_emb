@@ -199,11 +199,16 @@ class SISO():
                 for I1, I2 in itertools.product(self.casscf_state_idx[S1],
                                                 self.casscf_state_idx[S2]):
                     mc.fcisolver.spin = S1 # state-averaged fcisolver does not have definite spin, and wrong spin may be used to unpack nelecas
+                    mc.nelecas = unpack_nelec(mc.nelecas, spin=mc.fcisolver.spin)
+
                     t_dm1 = mc.fcisolver.trans_rdm1s(mc.ci[I2], mc.ci[I1], mc.ncas, mc.nelecas)
                     # shape (2, ncas, ncas)
 
                     for m in range(0, 3): # -1, 0, 1
-                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * np.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
+                        if np.abs(wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2)) > 1e-8:
+                            Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * np.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
+                        else:
+                            Y[m, I1, I2] = 0
         
             elif S1 - S2 == -2: # z_-1 s_+1
                 for I1, I2 in itertools.product(self.casscf_state_idx[S1],
@@ -280,56 +285,3 @@ class SISO():
         self.calc_h()
         self.solve()
         return 
-    
-
-if __name__ == '__main__':
-    title = 'Darmanovic2019_1'
-    
-    from pyscf import gto
-    mol = gto.M(atom='Darmanovic2019_1.xyz',
-        basis={'default':'def2tzvp','C':'6-31G*','H':'6-31G*'}, symmetry=0 ,spin = 3,charge = 2,verbose= 4)
-    
-    mf = scf.rohf.ROHF(mol).x2c()
-    chk_fname = title + '_rohf.chk'
-
-    mf.chkfile = chk_fname
-    mf.init_guess = 'chk'
-    mf.level_shift = .1
-    mf.max_cycle = 0
-    mf.max_memory = 100000
-    mf.kernel()
-    
-    from pyscf.mcscf import avas 
-    from liblan.solver import mcscfsol_pt2
-    aslabel = ['Co 3d']
-    statelis = [0, 40, 0, 10]
-
-    import os
-    from pyscf.lib import chkfile
-
-    caschk_fname = 'sacasscf.chk'
-    if not os.path.isfile(caschk_fname):
-        ncasorb,ncaselec,casorbind = avas.avas(mf, aslabel, canonicalize=False)
-    else:
-        ncasorb,ncaselec = 5, 7
-        casorbind = chkfile.load(caschk_fname, 'mcscf/mo_coeff')
-
-    # from pyscf import lib
-    # mo = lib.chkfile.load("sacasscf.chk", 'mcscf/mo_coeff')
-
-    mc = mcscfsol_pt2.sacasscf_solve_imp(mf,mol,ncasorb,ncaselec,casorbind,statelis,avas=True,nevpt2_ene=False)
-    
-    mysiso = SISO(title, mol, mc)
-
-
-    import h5py
-    z_fname = 'Darmanovic2019_1_siso_z.h5'
-    with h5py.File(z_fname, 'r') as fh5:
-        old_z = fh5['z'][:]
-
-    mysiso.z = old_z
-    
-    # mysiso.calc_z()
-    mysiso.kernel()
-    ang_mom = mysiso.orbital_ang_mom()
-    # mysiso.reshape_old()
