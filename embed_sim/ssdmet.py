@@ -78,9 +78,9 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
     occ_env, orb_env = np.linalg.eigh(ldm_env) # occupation and orbitals on environment
 
     nimp = len(imp_idx)
-    nfv = np.sum(occ_env <  thres) # frozen occupied
+    nfv = np.sum(occ_env <  thres) # frozen virtual 
     nbath = np.sum((occ_env >= thres) & (occ_env <= 2-thres)) # bath orbital
-    nfo = np.sum(occ_env > 2-thres) # frozen virtual 
+    nfo = np.sum(occ_env > 2-thres) # frozen occupied
 
     # defined w.r.t enviroment orbital index
     fv_idx = np.nonzero(occ_env <  thres)[0]
