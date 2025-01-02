@@ -95,8 +95,6 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
     es_occ = es_occ[::-1]
     es_nat_orb = es_nat_orb[:,::-1]
 
-    print('Number of bath orbitals', nbath)
-
     cloes = block_diag(np.eye(nimp), orb_env) @ block_diag(es_nat_orb, np.eye(nfo+nfv))
     # caoes = caolo @ cloes
 
@@ -168,23 +166,6 @@ def split_occ(mo_occ):
         split[1] = np.where(mo_occ-2>-1e-8, 1, 0)
         return split
 
-def make_es_1e_ints_old(mf,caoas,asorbs):
-    # hcore from mf
-    hcore = mf.get_hcore()
-
-    # HF J/K from env UO
-    uos = hcore.shape[0]-asorbs[-1]
-    dm_uo = caoas[:,uos:] @ caoas[:,uos:].conj().T*2
-    vj, vk = mf.get_jk(dm=dm_uo)
-
-    fock = hcore + vj - 0.5 * vk 
-
-    nimp = hcore.shape[0]-np.sum(asorbs)
-    act_inds = [*list(range(nimp)),*list(range(nimp+asorbs[0],nimp+asorbs[0]+asorbs[1]))]
-
-    asints1e = reduce(np.dot,(caoas[:,act_inds].conj().T,fock,caoas[:,act_inds]))
-    return asints1e 
-
 def make_es_int1e(mf_or_cas, fo_orb, es_orb):
     hcore = mf_or_cas.get_hcore() # DO NOT use get_hcore(mol), since x2c 1e term is not included
 
@@ -197,24 +178,7 @@ def make_es_int1e(mf_or_cas, fo_orb, es_orb):
     es_int1e = reduce(np.dot, (es_orb.T.conj(), fock, es_orb)) # AO to embedded space
     return es_int1e
 
-def make_es_2e_ints_old(mf,caoas,asorbs):
-    nimp = caoas.shape[0]-np.sum(asorbs)
-    act_inds = [*list(range(nimp)),*list(range(nimp+asorbs[0],nimp+asorbs[0]+asorbs[1]))]
-
-    if mf._eri is not None:
-        asints2e = ao2mo.full(mf._eri,caoas[:,act_inds])
-    else:
-        asints2e = ao2mo.full(mf.mol,caoas[:,act_inds])
-
-    asints2e = ao2mo.full(mf.mol,caoas[:,act_inds])
-
-    return asints2e 
-
 def make_es_int2e(mf, es_orb):
-    # if mf._eri is not None:
-    #     es_int2e = ao2mo.full(mf._eri, es_orb)
-    # else:
-    #     es_int2e = ao2mo.full(mf.mol, es_orb)
     es_int2e = ao2mo.full(mf.mol, es_orb)
     return es_int2e
 
@@ -343,6 +307,10 @@ class SSDMET(lib.StreamObject):
             self.nfo = nfo
             self.nfv = nfv
             self.nes = nimp + nbath
+            print('number of impurity orbitals', nimp)
+            print('number of bath orbitals', nbath)
+            print('number of frozen occupied orbitals', nfo)
+            print('number of frozen virtual orbitals', nfv)
 
             self.es_int1e = self.make_es_int1e()
             self.es_int2e = self.make_es_int2e()
@@ -406,8 +374,24 @@ class SSDMET(lib.StreamObject):
     
     def fo_ene(self, e_nuc = True):
         # energy of frozen occupied orbitals and nuclear-nuclear repulsion
-        dm_fo = self.mf_or_cas.make_rdm1(mo_coeff=self.fo_orb, mo_occ=np.ones((2, self.nfo)))
-        fo_ene = self.mf_or_cas.energy_elec(dm=dm_fo)[0]
+        dm_fo = self.fo_orb @ self.fo_orb.T.conj()*2
+
+        h1e = self.mf_or_cas.get_hcore()
+        if isinstance(dm_fo, np.ndarray) and dm_fo.ndim == 2:
+            dm_fo = np.array((dm_fo*.5, dm_fo*.5))
+        # get_veff in casci and rohf differ by a factor 2: rohf.get_veff = casci.get_veff * 2
+        # we manually build vhf
+        vj, vk = self.mf_or_cas.get_jk(self.mol, dm_fo)
+        vhf = vj[0] + vj[1] - vk
+        
+        if h1e[0].ndim < dm_fo[0].ndim:  # get [0] because h1e and dm may not be ndarrays
+            h1e = (h1e, h1e)
+        e1 = np.einsum('ij,ji->', h1e[0], dm_fo[0])
+        e1+= np.einsum('ij,ji->', h1e[1], dm_fo[1])
+        e_coul =(np.einsum('ij,ji->', vhf[0], dm_fo[0]) +
+                np.einsum('ij,ji->', vhf[1], dm_fo[1])) * .5
+        e_elec = (e1 + e_coul).real
+        fo_ene = e_elec
         if e_nuc:
             e_nuc = self.mf_or_cas.energy_nuc()
             fo_ene += e_nuc
