@@ -156,9 +156,12 @@ def _kernel(avas_obj):
         vir_weights = numpy.hstack([wvir[wvir>=threshold], wvir[wvir<threshold]])
 
     elif avas_obj.openshell_option == 3:
-        docc = nocc - mol.spin
+        docc = numpy.sum(numpy.where(mo_occ==2, 1, 0))
+        nfrac = nocc - docc
+        # docc = nocc - mol.spin
         wocc, u = numpy.linalg.eigh(sa[:(docc-ncore),:(docc-ncore)])
-        log.info('Option 3: threshold %s, num open shell %d', threshold, mol.spin)
+        # log.info('Option 3: threshold %s, num open shell %d', threshold, mol.spin)
+        log.info('Option 3: threshold %s, num open shell %d', threshold, nfrac)
         ncas_occ = (wocc > threshold).sum()
         nelecas = (mol.nelectron - ncore * 2) - (wocc < threshold).sum() * 2
         mocore = mo_coeff[:,ncore:docc].dot(u[:,wocc<threshold])
