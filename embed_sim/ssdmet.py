@@ -96,6 +96,9 @@ def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
     es_nat_orb = es_nat_orb[:,::-1]
 
     cloes = block_diag(np.eye(nimp), orb_env) @ block_diag(es_nat_orb, np.eye(nfo+nfv))
+    rearange_idx = np.argsort(np.concatenate((imp_idx, env_idx)))
+    cloes = cloes[rearange_idx, :]
+
     # caoes = caolo @ cloes
 
     # asorbs = (nuu,ne,nuo)
