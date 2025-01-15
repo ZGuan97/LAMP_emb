@@ -40,7 +40,7 @@ mycas = sacasscf_mixer.sacasscf_mixer(mf, ncas, nelec, statelis=[0, 40, 0, 10])
 cas_result = mycas.kernel(mo)
 
 e_corr = sacasscf_mixer.sacasscf_nevpt2(mycas)
-mycas.fcisolver.e_states += mycas.fcisolver.e_states + e_corr
+mycas.fcisolver.e_states = mycas.fcisolver.e_states + e_corr
 
 from embed_sim import siso
 mysiso = siso.SISO(title, mycas)
