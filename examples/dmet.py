@@ -33,7 +33,7 @@ mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
 
-mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co *')
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*')
 # if impurity is not assigned, the orbitals on the first atom is chosen as impurity
 mydmet.build()
 
@@ -43,8 +43,7 @@ es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
 
 es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
-es_cas.fcisolver.e_states += es_cas.fcisolver.e_states + es_ecorr
-
+es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
 total_cas = mydmet.total_cas(es_cas)
 mysiso = siso.SISO(title, total_cas)
 mysiso.kernel()
