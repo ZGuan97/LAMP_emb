@@ -1,7 +1,6 @@
 from pyscf import mcscf, fci, mrpt
 from pyscf.lib import logger
 
-import h5py
 import numpy as np
 
 from embed_sim import spin_utils
@@ -110,6 +109,30 @@ def sacasscf_nevpt2_casci_ver(mc):
                 # nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 
                 e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
+    else:
+        raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
+    return np.array(e_corrs)
+
+def analysis(mc):
+    from pyscf.mcscf.addons import StateAverageFCISolver
+    if isinstance(mc.fcisolver, StateAverageFCISolver):
+        spins = []
+        nroots = []
+        for solver in mc.fcisolver.fcisolvers:
+            spins.append(solver.spin)
+            nroots.append(solver.nroots)
+        e_corrs = []
+        for i, spin in enumerate(spins):
+            mc_ci = mcscf.CASCI(mc._scf, mc.ncas, mc.nelecas)
+            mc_ci.nelecas = _unpack_nelec(mc.nelecas, spin)
+            mc_ci.fcisolver.spin = spin
+            mc_ci.fix_spin_(shift=0.5, ss=(spin/2)*(spin/2+1))
+            mc_ci.fcisolver.nroots = nroots[i] # this is important for convergence of CASCI
+            mc_ci.kernel(mc.mo_coeff)
+            nroot = nroots[i]
+            for iroot in range(0, nroot):
+                print('analyze spin', spin, 'iroot', iroot)
+                mc_ci.analyze(ci=mc_ci.ci[iroot])
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
     return np.array(e_corrs)
