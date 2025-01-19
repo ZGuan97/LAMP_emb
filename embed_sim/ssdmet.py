@@ -4,7 +4,7 @@ from scipy.linalg import block_diag
 import h5py
 
 from pyscf.lo.orth import lowdin
-from pyscf import gto, scf, mcscf, ao2mo
+from pyscf import gto, scf, ao2mo
 
 import os
 
@@ -19,12 +19,15 @@ def compare_imp_idx(imp_idx1, imp_idx2):
 def mf_or_cas_make_rdm1s(mf_or_cas):
     from pyscf.scf.hf import RHF
     from pyscf.scf.rohf import ROHF
+    from embed_sim.cahf import CAHF
     from pyscf.mcscf.mc1step import CASSCF
     # I don't know whether there is a general way to calculate rdm1s
     # If there is, better to use that function
     if isinstance(mf_or_cas, CASSCF): 
         print('DMET from CASSCF')
         dma, dmb = mf_or_cas.make_rdm1s()
+    elif isinstance(mf_or_cas, CAHF):
+        dma = dmb = np.dot(mf_or_cas.mo_coeff*mf_or_cas.mo_occ, mf_or_cas.mo_coeff.conj().T) / 2
     elif isinstance(mf_or_cas, ROHF):
         print('DMET from ROHF')
         dma, dmb = mf_or_cas.make_rdm1()
@@ -34,7 +37,7 @@ def mf_or_cas_make_rdm1s(mf_or_cas):
         dmb = mf_or_cas.make_rdm1()
     else:
         raise TypeError('starting point not supported',  mf_or_cas.__class__)
-    return dma, dmb
+    return np.stack((dma, dmb), axis=0)
 
 def lowdin_orth(mol, ovlp=None):
     # lowdin orthonormalize
@@ -291,7 +294,8 @@ class SSDMET(lib.StreamObject):
         return ldm, caolo, cloao
         
     def build(self, chk_fname_load='', save_chk=True):
-        self.dm = self.mf_or_cas.make_rdm1()
+        self.dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
+        # self.dm = self.mf_or_cas.make_rdm1()
         if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
             self.dm = self.dm[0] + self.dm[1]
 
