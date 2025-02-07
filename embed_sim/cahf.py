@@ -179,41 +179,40 @@ def CAHF_get_occ(ncas, nelecas):
     return _get_occ
 
 def get_grad(mo_coeff, mo_occ, fock, f):
-        '''ROHF gradients is the off-diagonal block [co + cv + ov], where
-        [ cc co cv ]
-        [ oc oo ov ]
-        [ vc vo vv ]
-        '''
-        occidxa = mo_occ > 0
-        occidxb = mo_occ == 2
-        viridxa = ~occidxa
-        viridxb = ~occidxb
-        uniq_var_a = viridxa.reshape(-1,1) & occidxa # vc vo
-        uniq_var_b = viridxb.reshape(-1,1) & occidxb # oc vc
+    '''ROHF gradients is the off-diagonal block [co + cv + ov], where
+    [ cc co cv ]
+    [ oc oo ov ]
+    [ vc vo vv ]
+    '''
+    occidxa = mo_occ > 0
+    occidxb = mo_occ == 2
+    viridxa = ~occidxa
+    viridxb = ~occidxb
+    uniq_var_a = viridxa.reshape(-1,1) & occidxa # vc vo
+    uniq_var_b = viridxb.reshape(-1,1) & occidxb # oc vc
 
-        if getattr(fock, 'focka', None) is not None:
-            focka = fock.focka
-            fockb = fock.fockb
-        elif isinstance(fock, (tuple, list)) or getattr(fock, 'ndim', None) == 3:
-            focka, fockb = fock
-        else:
-            focka = fockb = fock
-        focka = mo_coeff.conj().T.dot(focka).dot(mo_coeff)
-        fockb = mo_coeff.conj().T.dot(fockb).dot(mo_coeff)
+    if getattr(fock, 'focka', None) is not None:
+        focka = fock.focka
+        fockb = fock.fockb
+    elif isinstance(fock, (tuple, list)) or getattr(fock, 'ndim', None) == 3:
+        focka, fockb = fock
+    else:
+        focka = fockb = fock
+    focka = mo_coeff.conj().T.dot(focka).dot(mo_coeff)
+    fockb = mo_coeff.conj().T.dot(fockb).dot(mo_coeff)
 
-        openidx = viridxb & occidxa
-        oc_block = openidx.reshape(-1,1) & occidxb
-        vo_block = viridxa.reshape(-1,1) & openidx
-        vc_block = viridxa.reshape(-1,1) & occidxb
-        g = np.zeros_like(focka)
-        # g[uniq_var_a]  = focka[uniq_var_a]
-        # g[uniq_var_b] += fockb[uniq_var_b]
+    openidx = viridxb & occidxa
+    oc_block = openidx.reshape(-1,1) & occidxb
+    vo_block = viridxa.reshape(-1,1) & openidx
+    vc_block = viridxa.reshape(-1,1) & occidxb
+    g = np.zeros_like(focka)
+    # g[uniq_var_a]  = focka[uniq_var_a]
+    # g[uniq_var_b] += fockb[uniq_var_b]
 
-        g[oc_block] = fockb[oc_block]
-        g[vo_block] = focka[vo_block]
-        g[vc_block] = 2*f*focka[vc_block] + 2*(1-f)*fockb[vc_block]
-        # g[vc_block] = f*focka[vc_block] + (1-f)*fockb[vc_block]
-        return g[uniq_var_a | uniq_var_b]
+    g[oc_block] = fockb[oc_block]
+    g[vo_block] = focka[vo_block]
+    g[vc_block] = 2*f*focka[vc_block] + 2*(1-f)*fockb[vc_block]
+    return g[uniq_var_a | uniq_var_b]
 
 def CAHF_get_grad(f):
     def _get_grad(self, mo_coeff, mo_occ, fock=None):
@@ -300,6 +299,75 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
             mo = mo[0]
         dm = scf.rohf.make_rdm1([fproj(mo[0]),fproj(mo[1])], mo_occ)
     return dm
+
+from pyscf.soscf.newton_ah import _CIAH_SOSCF, gen_g_hop_uhf
+def CAHF_gen_g_hop(frac):
+    def _gen_g_hop(mf, mo_coeff, mo_occ, fock_ao=None, h1e=None,
+                    with_symmetry=True):
+        if getattr(fock_ao, 'focka', None) is None:
+            dm0 = mf.make_rdm1(mo_coeff, mo_occ)
+            fock_ao = mf.get_fock(h1e, dm=dm0)
+        fock_ao = fock_ao.focka, fock_ao.fockb
+        mo_occa = occidxa = mo_occ > 0
+        mo_occb = occidxb = mo_occ ==2
+        ug, uh_op, uh_diag = gen_g_hop_uhf(mf, (mo_coeff,)*2, (mo_occa,mo_occb),
+                                        fock_ao, None, with_symmetry)
+
+        viridxa = ~occidxa
+        viridxb = ~occidxb
+        uniq_var_a = viridxa[:,None] & occidxa
+        uniq_var_b = viridxb[:,None] & occidxb
+        uniq_ab = uniq_var_a | uniq_var_b
+        nmo = mo_coeff.shape[-1]
+        nocca = np.count_nonzero(mo_occa)
+        nvira = nmo - nocca
+
+        def sum_ab(x):
+            x1 = np.zeros((nmo,nmo), dtype=x.dtype)
+            x1[uniq_var_a]  = x[:nvira*nocca]
+            x1[uniq_var_b] += x[nvira*nocca:]
+
+            x_aug = np.zeros((nmo,nmo), dtype=x.dtype)
+            x_aug[uniq_var_a]  = x[:nvira*nocca]
+            x_aug[uniq_var_b] -= x[nvira*nocca:]
+
+            x1[uniq_var_a & uniq_var_b] += (2*frac-1) * x_aug[uniq_var_a & uniq_var_b]
+            return x1[uniq_ab]
+
+        g = sum_ab(ug)
+        h_diag = sum_ab(uh_diag)
+        def h_op(x):
+            x1 = np.zeros((nmo,nmo), dtype=x.dtype)
+            # unpack ROHF rotation parameters
+            x1[uniq_ab] = x
+            x1 = np.hstack((x1[uniq_var_a],x1[uniq_var_b]))
+            return sum_ab(uh_op(x1))
+        return g, h_op, h_diag
+    return _gen_g_hop
+
+class _SecondOrderCAHF(_CIAH_SOSCF):
+    def gen_g_hop(self, *args, **kwargs):
+        _gen_g_hop = CAHF_gen_g_hop(self._scf.frac)
+        return _gen_g_hop(self, *args, **kwargs)
+
+from pyscf.soscf.newton_ah import newton as pyscf_newton
+
+def cahf_newton(mf):
+    print('cahf_newton called')
+    from pyscf import scf
+    if isinstance(mf, _CIAH_SOSCF):
+        return mf
+
+    assert isinstance(mf, hf.SCF)
+
+    if mf.istype('CAHF'):
+        cls = _SecondOrderCAHF
+        return lib.set_class(cls(mf), (cls, mf.__class__))
+    else:
+        return pyscf_newton(mf)
+
+from pyscf.soscf import newton_ah
+newton_ah.newton = cahf_newton
 
 class CAHF(scf.rohf.ROHF):
     def __init__(self, mol, ncas, nelecas, spin):
