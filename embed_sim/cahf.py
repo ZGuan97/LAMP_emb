@@ -324,14 +324,18 @@ def CAHF_gen_g_hop(frac):
 
         def sum_ab(x):
             x1 = np.zeros((nmo,nmo), dtype=x.dtype)
-            x1[uniq_var_a]  = x[:nvira*nocca]
-            x1[uniq_var_b] += x[nvira*nocca:]
+            # x1[uniq_var_a]  = x[:nvira*nocca]
+            # x1[uniq_var_b] += x[nvira*nocca:]
 
-            x_aug = np.zeros((nmo,nmo), dtype=x.dtype)
-            x_aug[uniq_var_a]  = x[:nvira*nocca]
-            x_aug[uniq_var_b] -= x[nvira*nocca:]
+            x1[uniq_var_a]  = 2*frac*x[:nvira*nocca]
+            x1[uniq_var_b] += 2*(1-frac)*x[nvira*nocca:]
 
-            x1[uniq_var_a & uniq_var_b] += (2*frac-1) * x_aug[uniq_var_a & uniq_var_b]
+            # x_aug = np.zeros((nmo,nmo), dtype=x.dtype)
+            # x_aug[uniq_var_a]  = x[:nvira*nocca]
+            # x_aug[uniq_var_b] -= x[nvira*nocca:]
+
+            # x1[uniq_var_a & uniq_var_b] += (2*frac-1) * x_aug[uniq_var_a & uniq_var_b]
+            # x1[uniq_var_a & uniq_var_b] = x1[uniq_var_a & uniq_var_b]/2
             return x1[uniq_ab]
 
         g = sum_ab(ug)
@@ -403,6 +407,25 @@ class CAHF(scf.rohf.ROHF):
     def init_guess_by_chkfile(self, chkfile=None, project=None):
         if chkfile is None: chkfile = self.chkfile
         return init_guess_by_chkfile(self.mol, chkfile, project=project)
+    
+    def gen_response(self, mo_coeff=None, mo_occ=None,
+                      with_j=True, hermi=0, max_memory=None):
+        assert isinstance(self, CAHF)
+        mol = self.mol
+        f, a, b = self.frac, self.alpha, self.beta
+        if with_j:
+            def vind(dm1):
+                vj, vk = self.get_jk(mol, dm1, hermi=hermi)
+                v1 = vj[0] + vj[1] - vk
+                v1[0] = ((2*f+2*a*f*(f-1))*vj[0] + (2-2*f-2*a*f*(f-1))*vj[1]
+                    +(-f-b*(f-1)*f)*vk[0]+(-1+f+b*(f-1)*f)*vk[1])
+                v1[1] = ((2*f+2*a*f**2)*vj[0] + (2-2*f-2*a*f**2)*vj[1]
+                    +(-f-b*f**2)*vk[0]+(-1+f+b*f**2)*vk[1])
+                return v1
+        else:
+            def vind(dm1):
+                return -self.get_k(mol, dm1, hermi=hermi)
+        return vind
 
 
 if __name__ == '__main__':
