@@ -364,7 +364,7 @@ def cahf_newton(mf):
 
     assert isinstance(mf, hf.SCF)
 
-    if mf.istype('CAHF'):
+    if isinstance(mf, CAHF):
         cls = _SecondOrderCAHF
         return lib.set_class(cls(mf), (cls, mf.__class__))
     else:
