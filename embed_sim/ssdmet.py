@@ -185,7 +185,10 @@ def make_es_int1e(mf_or_cas, fo_orb, es_orb):
     return es_int1e
 
 def make_es_int2e(mf, es_orb):
-    es_int2e = ao2mo.full(mf.mol, es_orb)
+    try:
+        es_int2e = mf.with_df.ao2mo(es_orb)
+    except AttributeError:
+        es_int2e = ao2mo.full(mf.mol, es_orb)
     return es_int2e
 
 from pyscf import lib
