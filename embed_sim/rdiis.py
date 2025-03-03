@@ -19,6 +19,8 @@ class RDIIS(lib.diis.DIIS):
         self.imp_idx = imp_idx
         self.kernel = kernel
         self.power = power
+        self.ent = 1.0
+        self.ent_conv_tol = 0.1
 
     def get_err_vec1(self, s, d, f):
         '''error vector = SDF - FDS + R'''
@@ -41,9 +43,10 @@ class RDIIS(lib.diis.DIIS):
             ldm[0] = reduce(np.dot,(cloao,dm[0],cloao.conj().T))
             ldm[1] = reduce(np.dot,(cloao,dm[1],cloao.conj().T))
             ent = ssdmet.get_rdiis_property(ldm, self.imp_idx, self.rdiis_prop)
+            self.ent = ent
 
-            logger.info(self, '----------RDDIS-Entropy %.3f', ent)
-            if np.abs(ent) > 0.2:
+            logger.info(self, '----------RDIIS-Entropy %.3f', ent)
+            if np.abs(ent) > self.ent_conv_tol:
                 if kernel is None:
                     errvec = errvec+np.eye(errvec.shape[0])*power*np.abs(ent)
                 else:
@@ -83,3 +86,17 @@ class RDIIS(lib.diis.DIIS):
         if self.rollback > 0 and len(self._bookkeep) == self.space:
             self._bookkeep = self._bookkeep[-self.rollback:]
         return xnew
+
+def rdiis_check_convergence(envs):
+    mf = envs['mf']
+    e_tot = envs['e_tot']
+    last_hf_e = envs['last_hf_e']
+    norm_gorb = envs['norm_gorb']
+    conv_tol = envs['conv_tol']
+    conv_tol_grad = envs['conv_tol_grad']
+    assert isinstance(mf.diis, RDIIS)
+    if mf.diis.ent < mf.diis.ent_conv_tol and abs(e_tot-last_hf_e) < conv_tol and norm_gorb < conv_tol_grad:
+        print('Converged by rdiis_check_convergence with entropy', mf.diis.ent)
+        return True
+    else:
+        return False
