@@ -208,6 +208,7 @@ class SSDMET(lib.StreamObject):
         if imp_idx is not None:
             self.imp_idx = imp_idx
         else:
+            print('impurity index not assigned, use the first atom as impurity')
             self.imp_idx = self.mol.atom_symbol(0)
         self.threshold = threshold
 

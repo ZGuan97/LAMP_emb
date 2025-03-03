@@ -124,14 +124,14 @@ class SISO():
     def spin_ang_mom(self):
         spin_ang_mom_ = np.zeros((3, self.nstates, self.nstates), dtype = complex)
         for S in self.Slis:
-            S = int(S)
+            S = int(S) # to avoid problem of wigner_3j function on some machine(macos)
             for MS1 in range(-S, S+1, 2):
                 for MS2 in range(-S, S+1, 2):
-                        spin_ang_mom_[2][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 0, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2)
+                    spin_ang_mom_[2][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 0, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2)
 
-                        spin_ang_mom_[0][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, -1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=-1
+                    spin_ang_mom_[0][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, -1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=-1
 
-                        spin_ang_mom_[1][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=1
+                    spin_ang_mom_[1][np.ix_(self.siso_state_idx[S, MS2], self.siso_state_idx[S, MS1])] = np.eye(len(self.siso_state_idx[S, MS1])) * S * (-1.0)**(S/2 - MS2/2) * wigner_3j(S/2, 1, S/2, -MS2/2, 1, MS1/2) / wigner_3j(S/2, 1, S/2, -S/2, 0, S/2) # m=1
 
         spin_ang_mom = np.zeros((3,self.nstates, self.nstates), dtype = complex)
         spin_ang_mom[0,:,:] = (spin_ang_mom_[0,:,:] - spin_ang_mom_[1,:,:]) / np.sqrt(2)
