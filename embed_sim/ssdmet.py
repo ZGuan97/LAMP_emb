@@ -374,7 +374,7 @@ class SSDMET(lib.StreamObject):
     
     def total_cas(self, es_cas):
         from embed_sim import sacasscf_mixer
-        total_cas = sacasscf_mixer.sacasscf_mixer(self.mf_or_cas, es_cas.ncas, es_cas.nelecas)
+        total_cas = sacasscf_mixer.sacasscf_mixer(self.mf_or_cas, es_cas.ncas, es_cas.nelecas, statelis=sacasscf_mixer.read_statelis(es_cas), weights=es_cas.weights)
         total_cas.fcisolver = es_cas.fcisolver
         total_cas.ci = es_cas.ci
         total_cas.mo_coeff = np.hstack((self.fo_orb, self.es_orb @ es_cas.mo_coeff, self.fv_orb))

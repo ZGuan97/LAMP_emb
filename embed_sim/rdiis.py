@@ -11,7 +11,7 @@ from functools import reduce
 from embed_sim import ssdmet
 
 class RDIIS(lib.diis.DIIS):
-    def __init__(self, mf=None, filename=None, rdiis_prop='dS', imp_idx=None,power=.2,kernel=None):
+    def __init__(self, mf=None, filename=None, rdiis_prop='dS', imp_idx=None,power=.2,kernel=None,mute=False):
         lib.diis.DIIS.__init__(self, mf, filename)
         self.rollback = False
         self.space = 8
@@ -19,6 +19,7 @@ class RDIIS(lib.diis.DIIS):
         self.imp_idx = imp_idx
         self.kernel = kernel
         self.power = power
+        self.mute = mute
         self.ent = 1.0
         self.ent_conv_tol = 0.1
 
@@ -45,7 +46,8 @@ class RDIIS(lib.diis.DIIS):
             ent = ssdmet.get_rdiis_property(ldm, self.imp_idx, self.rdiis_prop)
             self.ent = ent
 
-            logger.info(self, '----------RDIIS-Entropy %.3f', ent)
+            if not self.mute:
+                logger.info(self, '----------RDIIS-Entropy %.3f', ent)
             if np.abs(ent) > self.ent_conv_tol:
                 if kernel is None:
                     errvec = errvec+np.eye(errvec.shape[0])*power*np.abs(ent)

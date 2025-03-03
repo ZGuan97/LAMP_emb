@@ -8,6 +8,8 @@ from pyscf.scf import jk
 from pyscf.data import nist
 from functools import reduce
 from pyscf.fci import cistring
+from pyscf import df
+from pyscf.lib import logger
 
 from embed_sim.spin_utils import gen_statelis, unpack_nelec
 from embed_sim.sacasscf_mixer import read_statelis
@@ -39,7 +41,7 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
 
 # SISO object for SOC calculation, based on multi-configuration calculation 
 class SISO():
-    def __init__(self, title, mc, statelis=None):
+    def __init__(self, title, mc, statelis=None, with_df=None):
         self.title = title
         self.mol = mc.mol
         self.mc = mc
@@ -68,6 +70,11 @@ class SISO():
         # self.Y = np.zeros((np.sum(self.statelis), np.sum(self.statelis), 3), dtype = complex)
         self.SOC_Hamiltonian = np.zeros((self.nstates, self.nstates), dtype = complex)
         self.full_trans_dm = np.zeros((self.nstates, self.nstates, self.mc.ncas, self.mc.ncas), dtype = complex)
+
+        self.with_df = with_df
+        if self.with_df is not None:
+            if not isinstance(self.with_df, df.df.DF):
+                raise NotImplementedError
 
     def state_idx(self, S=None, MS=None, alpha=None): 
         if alpha is not None:
@@ -169,10 +176,43 @@ class SISO():
         sodm1 = self.mc.make_rdm1()
 
         # 2e SOC J/K1/K2 integrals
-        # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
-        vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
+        log = logger.Logger(self.mol.stdout, 9)
+        if self.with_df is None:
+            # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
+            t0 = (logger.process_clock(), logger.perf_counter())
+            vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
 
-        #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
+            #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
+            t0 = log.timer_debug1('2e SOC J/K1/K2 integrals', *t0)
+        else:
+            print('SISO with density fitting', self.with_df)
+            mol = siso.with_df.mol
+            auxmol = siso.with_df.auxmol
+            nao = mol.nao
+            naux = auxmol.nao
+            log = logger.Logger(self.mol.stdout, 9)
+            t0 = (logger.process_clock(), logger.perf_counter())
+            t1 = (logger.process_clock(), logger.perf_counter())
+            
+            ints_3c2e = df.incore.aux_e2(mol, auxmol, intor='int3c2e')
+            ints_2c2e = auxmol.intor('int2c2e')
+            ints_3c2e_pvxp1 = df.incore.aux_e2(mol, auxmol, intor='int3c2e_pvxp1')
+            t1 = log.timer_debug1('int3c2e, int2c2e, int3c2e_pvxp1', *t1)
+            
+            df_coef = np.linalg.solve(ints_2c2e, ints_3c2e.reshape(nao*nao, naux).T)
+            df_coef = df_coef.reshape(naux, nao, nao)
+            t1 = log.timer_debug1('linear equation', *t1)
+            
+            vj = np.einsum('xijP,Pkl,kl->xij', ints_3c2e_pvxp1, df_coef, sodm1, optimize=True)
+            t1 = log.timer_debug1('vj', *t1)
+            
+            vk = np.einsum('xijP,Pkl,jk->xil', ints_3c2e_pvxp1, df_coef, sodm1, optimize=True)
+            t1 = log.timer_debug1('vk', *t1)
+            
+            vk2 = np.einsum('xijP,Pkl,li->xkj', ints_3c2e_pvxp1, df_coef, sodm1, optimize=True)
+            t1 = log.timer_debug1('vk2', *t1)
+            t0 = log.timer_debug1('2e SOC J/K1/K2 integrals', *t0)
+            
         hso2e = vj - 1.5 * vk - 1.5 * vk2
         
         alpha = nist.ALPHA
