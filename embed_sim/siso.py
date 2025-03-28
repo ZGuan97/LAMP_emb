@@ -186,11 +186,11 @@ class SISO():
             t0 = log.timer_debug1('2e SOC J/K1/K2 integrals', *t0)
         else:
             print('SISO with density fitting', self.with_df)
-            mol = siso.with_df.mol
-            auxmol = siso.with_df.auxmol
+            mol = self.with_df.mol
+            auxmol = self.with_df.auxmol
             nao = mol.nao
             naux = auxmol.nao
-            log = logger.Logger(self.mol.stdout, 9)
+            log = logger.Logger(mol.stdout, 9)
             t0 = (logger.process_clock(), logger.perf_counter())
             t1 = (logger.process_clock(), logger.perf_counter())
             
