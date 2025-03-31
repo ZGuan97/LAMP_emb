@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from pyscf import gto, scf, df
-from embed_sim import ssdmet, sacasscf_mixer, siso
+from embed_sim import ssdmet, sacasscf_mixer, siso, rdiis
 
 title = 'CoSH4'
 
@@ -32,6 +32,7 @@ mf = scf.rohf.ROHF(mol).density_fit().x2c()
 '''
 Sometimes it is useful to save it to disk for re-use in later calculations.
 This can be achieved by specifying a HDF5 file by setting _cderi_to_save.
+The saved DF tensor can be used later by setting _cderi to the HDF5 file.
 '''
 cderi_fname = title + '_cderi.h5'
 if not os.path.exists(cderi_fname):
@@ -39,13 +40,13 @@ if not os.path.exists(cderi_fname):
     mydf.auxbasis = mf.with_df.auxbasis
     mydf._cderi_to_save = cderi_fname
     mydf.build()
-'''
-The saved DF tensor can be used later by setting _cderi to the HDF5 file.
-'''
-mf.with_df._cderi = cderi_fname
+    mf.with_df = mydf
+else:
+    mf.with_df._cderi = cderi_fname
+    mf.with_df.auxmol = df.addons.make_auxmol(mol)
 
 chk_fname = title + '_rohf.chk'
-
+mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Co.*d']),power=0.2)
 mf.chkfile = chk_fname
 mf.init_guess = 'chk'
 mf.level_shift = .1
@@ -57,7 +58,7 @@ mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*')
 # if impurity is not assigned, the orbitals on the first atom is chosen as impurity
 mydmet.build()
 
-ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
+ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5, openshell_option=3)
 
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
