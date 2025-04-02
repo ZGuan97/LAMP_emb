@@ -353,6 +353,7 @@ class SSDMET(lib.StreamObject):
         es_dm = np.zeros((2, self.nes, self.nes))
         es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
         es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
+        self.es_dm = es_dm
         es_mf.mo_coeff = np.eye(self.nes)
 
         # assume we only perfrom ROHF-in-ROHF embedding
