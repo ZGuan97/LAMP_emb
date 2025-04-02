@@ -214,6 +214,9 @@ class SISO():
             
             auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=self.verbose)
             def load(aux_slice):
+                if self.with_df._cderi is None:
+                    self.with_df.build()
+                
                 feri_name = self.title+'_int3c2e_pvxp1.h5'
                 b0, b1 = aux_slice
                 with df.addons.load(feri_name, 'j3c') as feri:
