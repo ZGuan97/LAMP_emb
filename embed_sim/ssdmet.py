@@ -196,10 +196,12 @@ class SSDMET(lib.StreamObject):
     single-shot DMET with impurity-environment partition
     """
     def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, max_mem=64000,verbose=logger.INFO):
+        print('****** DMET ******')
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
-        self.max_mem = max_mem # TODO
+        # self.max_mem = max_mem # TODO
+        self.max_mem = mf_or_cas.max_memory # TODO
         self.verbose = verbose # TODO
 
         # inputs
@@ -327,6 +329,7 @@ class SSDMET(lib.StreamObject):
         if save_chk:
             self.save_chk(chk_fname_save)
         self.es_mf = self.ROHF()
+        print('energy from frozen occupied orbitals', self.fo_ene())
         return self.es_mf
     
     def ROHF(self, run_mf=False):
