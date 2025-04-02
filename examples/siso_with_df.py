@@ -33,6 +33,7 @@ mf = scf.rohf.ROHF(mol).density_fit().x2c()
 Sometimes it is useful to save it to disk for re-use in later calculations.
 This can be achieved by specifying a HDF5 file by setting _cderi_to_save.
 The saved DF tensor can be used later by setting _cderi to the HDF5 file.
+If I/O free treatment is needed, just skip the following part.
 '''
 cderi_fname = title + '_cderi.h5'
 if not os.path.exists(cderi_fname):
@@ -63,12 +64,20 @@ ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5, opens
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
 
-es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
-es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
+# es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
+# es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
 total_cas = mydmet.total_cas(es_cas)
+Ha2cm = 219474.63
+np.savetxt(mydmet.title+'_opt.txt',(es_cas.fcisolver.e_states-np.min(es_cas.fcisolver.e_states))*Ha2cm,fmt='%.6f')
 '''
 Density fitting can be used to accelerate the calculation of SOC 2e integrals
 by setting a DF object to the with_df attribute.
 '''
-mysiso = siso.SISO(title, total_cas, with_df=mf.with_df)
+mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=5)
+'''
+Set verbose greater than 5 will output detailed information for 2e SOC J/K1/K2 contraction.
+'''
+mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=6)
+mysiso.verbose = 9
+
 mysiso.kernel()
