@@ -47,6 +47,7 @@ def lowdin_orth(mol, ovlp=None):
         s = ovlp
     caolo, cloao = lowdin(s), lowdin(s) @ s # caolo=lowdin(s)=s^-1/2, cloao=lowdin(s)@s=s^1/2
     return caolo, cloao
+    
 
 def build_embeded_subspace(ldm, imp_idx,lo_meth='lowdin',thres=1e-13):
     """
@@ -298,8 +299,32 @@ class SSDMET(lib.StreamObject):
         caolo, cloao = lowdin_orth(self.mol)
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
+    
+    def lowdin_orth(self, restore_imp = False):
+        # lowdin orthonormalize
+        caolo, cloao = lowdin_orth(self.mol)
+        if restore_imp:
+            imp_idx = self.imp_idx
+
+            Q1 = cloao[:, imp_idx]
+            Q1, _ = np.linalg.qr(Q1) # orthonormalize
+            P = np.eye(*cloao.shape) - Q1 @ Q1.T.conj()
+            B = P @ cloao[:, 45:]
+            from scipy.linalg import svd
+            U, S, Vh = svd(B, full_matrices=False)
+
+            Q = np.zeros(cloao.shape)
+            Q[:, imp_idx] = Q1
+            mask_env = np.ones(len(Q), dtype=bool)
+            mask_env[imp_idx] = False
+            Q[:, mask_env] = U[:, 0: cloao.shape[0] - len(imp_idx)]
+            cloao = Q.T.conj() @ cloao
+            caolo = caolo @ Q
+
+        ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
+        return ldm, caolo, cloao
         
-    def build(self, chk_fname_load='', save_chk=True):
+    def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
         self.dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
         # self.dm = self.mf_or_cas.make_rdm1()
         if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -308,7 +333,7 @@ class SSDMET(lib.StreamObject):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth()
+            ldm, caolo, cloao = self.lowdin_orth(restore_imp)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
             caoes = caolo @ cloes
