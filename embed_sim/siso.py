@@ -207,7 +207,14 @@ class SISO():
             mol = self.with_df.mol
             auxmol = self.with_df.auxmol
             nao = mol.nao
-            naoaux = auxmol.nao
+            with df.addons.load(self.with_df._cderi, self.with_df._dataname) as feri:
+                if isinstance(feri, np.ndarray):
+                    naoaux = feri.shape[0]
+                else:
+                    if isinstance(feri, h5py.Group):
+                        naoaux = feri['0'].shape[0]
+                    else:
+                        naoaux = feri.shape[0]
             
             log = logger.Logger(self.mol.stdout, self.verbose)
             t0 = (logger.process_clock(), logger.perf_counter())
@@ -225,11 +232,14 @@ class SISO():
                     if isinstance(feri, np.ndarray):
                         j3c =  np.asarray(feri[b0:b1], order='C')
                     else:
-                        j3c = _load_from_h5g(feri, b0, b1)
+                        if isinstance(feri, h5py.Group):
+                            j3c = _load_from_h5g(feri, b0, b1)
+                        else:
+                            j3c =  np.asarray(feri[b0:b1])
                 return j3c_pvxp1, j3c
             
             max_memory = int(mol.max_memory - lib.current_memory()[0])
-            blksize = max(4, int(max_memory*.02e6/8/nao**2/3))
+            blksize = max(4, int(max_memory*.06e6/8/nao**2/3))
             vj = vk = vk2 = 0
             p1 = 0
             for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
