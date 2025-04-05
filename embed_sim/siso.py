@@ -39,7 +39,7 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
     for str0, tab in enumerate(ades_index):
         for _, i, str1, sign in tab:
             t1bra[str1,:,i] += sign * bra[str0,:]
-    dm1 = np.einsum('abp,abq->pq', t1bra, t1ket)
+    dm1 = lib.einsum('abp,abq->pq', t1bra, t1ket)
     return dm1
 
 def auxe2(mol, auxmol, title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=5):
@@ -136,12 +136,12 @@ class SISO():
 
         # dm[p,q] = <|q^+ p|>
 
-        ang_mom_core =np.einsum('ijk, jk->i', ang_mom_1e, dm1core)
+        ang_mom_core = lib.einsum('ijk, jk->i', ang_mom_1e, dm1core)
         as_mo_tdm1 = self.make_full_trans_dm()
         mocas = self.mc.mo_coeff[:, self.mc.ncore: self.mc.ncore+self.mc.ncas]
         ang_mom_act_mo = np.einsum('ijk, ja, bk->abi', ang_mom_1e, mocas, mocas.conj().T)
 
-        ang_mom_act = np.einsum('abi, mnba->mni', ang_mom_act_mo, as_mo_tdm1)
+        ang_mom_act = lib.einsum('abi, mnba->mni', ang_mom_act_mo, as_mo_tdm1)
         ang_mom = ang_mom_core + ang_mom_act
 
         return ang_mom
@@ -179,10 +179,10 @@ class SISO():
         mocas = self.mc.mo_coeff[:, self.mc.ncore: self.mc.ncore+self.mc.ncas]
         dm1b = np.dot(mocore, mocore.conj().T)
 
-        ao_tdm1 = np.einsum('ia, mnab, bj->mnij', mocas, as_mo_tdm1, mocas.conj().T)
+        ao_tdm1 = lib.einsum('ia, mnab, bj->mnij', mocas, as_mo_tdm1, mocas.conj().T)
         tdm1 = dm1b + ao_tdm1
 
-        ang_mom = np.einsum('ijk, mnkj->mni', ang_mom_1e, tdm1)
+        ang_mom = lib.einsum('ijk, mnkj->mni', ang_mom_1e, tdm1)
         return ang_mom
 
     def calc_z(self):
@@ -289,7 +289,7 @@ class SISO():
 
                     for m in range(0, 3): # -1, 0, 1
                         if np.abs(wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2)) > 1e-8:
-                            Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * np.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
+                            Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * lib.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
                         else:
                             Y[m, I1, I2] = 0
         
@@ -299,7 +299,7 @@ class SISO():
                     t_dm1 = make_rdm1_splus(mc.ci[I2], mc.ci[I1], mc.ncas, mc.nelecas, spin = S1) # shape (ncas, ncas)
                     
                     for m in range(0, 3): # -1, 0, 1
-                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 1, S1/2) * np.einsum('ij,ij->', self.z[m], - 1 / np.sqrt(2) * t_dm1)
+                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 1, S1/2) * lib.einsum('ij,ij->', self.z[m], - 1 / np.sqrt(2) * t_dm1)
 
             elif S1 - S2 == 2: # z_+1 s_-1
                 for I1, I2 in itertools.product(self.casscf_state_idx[S1],
@@ -307,7 +307,7 @@ class SISO():
                     t_dm1 = make_rdm1_splus(mc.ci[I1], mc.ci[I2], mc.ncas, mc.nelecas, spin = S2).conj().T # shape (ncas, ncas), hermitian conjugate of splus matrix element
                     
                     for m in range(0, 3): # -1, 0, 1
-                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, -1, S1/2) * np.einsum('ij,ij->', self.z[m], 1 / np.sqrt(2) * t_dm1)
+                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, -1, S1/2) * lib.einsum('ij,ij->', self.z[m], 1 / np.sqrt(2) * t_dm1)
         self.Y = Y
     
     def calc_h(self):
