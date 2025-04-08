@@ -55,7 +55,10 @@ mf.max_cycle = 1000
 mf.max_memory = 100000
 mf.kernel()
 
-mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*')
+'''
+Switch to DF-DMET with density_fit decoration
+'''
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*').density_fit()
 # if impurity is not assigned, the orbitals on the first atom is chosen as impurity
 mydmet.build()
 
@@ -64,8 +67,8 @@ ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5, opens
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
 
-# es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
-# es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
+es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
+es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
 total_cas = mydmet.total_cas(es_cas)
 Ha2cm = 219474.63
 np.savetxt(mydmet.title+'_opt.txt',(es_cas.fcisolver.e_states-np.min(es_cas.fcisolver.e_states))*Ha2cm,fmt='%.6f')
@@ -73,11 +76,11 @@ np.savetxt(mydmet.title+'_opt.txt',(es_cas.fcisolver.e_states-np.min(es_cas.fcis
 Density fitting can be used to accelerate the calculation of SOC 2e integrals
 by setting a DF object to the with_df attribute.
 '''
-mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=5)
+mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=5).density_fit()
 '''
 Set verbose greater than 5 will output detailed information for 2e SOC J/K1/K2 contraction.
 '''
-mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=6)
+mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=6).density_fit()
 mysiso.verbose = 9
 
 mysiso.kernel()
