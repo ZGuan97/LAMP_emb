@@ -42,20 +42,9 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
     dm1 = lib.einsum('abp,abq->pq', t1bra, t1ket)
     return dm1
 
-def auxe2(mol, auxmol, title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=5):
-    feri_name = title+'_'+int3c+'.h5'
-    if not os.path.exists(feri_name):
-        log = logger.Logger(mol.stdout, verbose)
-        t0 = (logger.process_clock(), logger.perf_counter())
-        df.outcore.cholesky_eri_b(mol, feri_name, auxbasis=auxmol.basis, int3c=int3c, aosym=aosym, comp=comp, verbose=verbose)
-        t0 = log.timer('int3c2e_pvxp1', *t0)
-    else:
-        print('Load from {}'.format(feri_name))
-    return
-
 # SISO object for SOC calculation, based on multi-configuration calculation 
 class SISO():
-    def __init__(self, title, mc, statelis=None, with_df=None, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):
+    def __init__(self, title, mc, statelis=None, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):        
         self.title = title
         self.mol = mc.mol
         self.mc = mc
@@ -85,10 +74,6 @@ class SISO():
         self.SOC_Hamiltonian = np.zeros((self.nstates, self.nstates), dtype = complex)
         self.full_trans_dm = np.zeros((self.nstates, self.nstates, self.mc.ncas, self.mc.ncas), dtype = complex)
 
-        self.with_df = with_df
-        if self.with_df is not None:
-            if not isinstance(self.with_df, df.df.DF):
-                raise NotImplementedError
         self.save_mag = save_mag
         self.save_Hmat = save_Hmat
         self.save_old_Hal = save_old_Hal
@@ -194,67 +179,13 @@ class SISO():
         sodm1 = self.mc.make_rdm1()
 
         # 2e SOC J/K1/K2 integrals
-        if self.with_df is None:
-            # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
-            log = logger.Logger(self.mol.stdout, self.verbose)
-            t0 = (logger.process_clock(), logger.perf_counter())
-            vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
+        # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
+        log = logger.Logger(self.mol.stdout, self.verbose)
+        t0 = (logger.process_clock(), logger.perf_counter())
+        vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
 
-            #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
-            t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
-        else:
-            print('SISO with density fitting', self.with_df)
-            mol = self.with_df.mol
-            auxmol = self.with_df.auxmol
-            nao = mol.nao
-            with df.addons.load(self.with_df._cderi, self.with_df._dataname) as feri:
-                if isinstance(feri, np.ndarray):
-                    naoaux = feri.shape[0]
-                else:
-                    if isinstance(feri, h5py.Group):
-                        naoaux = feri['0'].shape[0]
-                    else:
-                        naoaux = feri.shape[0]
-            
-            log = logger.Logger(self.mol.stdout, self.verbose)
-            t0 = (logger.process_clock(), logger.perf_counter())
-            
-            auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=self.verbose)
-            def load(aux_slice):
-                if self.with_df._cderi is None:
-                    self.with_df.build()
-                
-                feri_name = self.title+'_int3c2e_pvxp1.h5'
-                b0, b1 = aux_slice
-                with df.addons.load(feri_name, 'j3c') as feri:
-                    j3c_pvxp1 = _load_from_h5g(feri, b0, b1)
-                with df.addons.load(self.with_df._cderi, self.with_df._dataname) as feri:
-                    if isinstance(feri, np.ndarray):
-                        j3c =  np.asarray(feri[b0:b1], order='C')
-                    else:
-                        if isinstance(feri, h5py.Group):
-                            j3c = _load_from_h5g(feri, b0, b1)
-                        else:
-                            j3c =  np.asarray(feri[b0:b1])
-                return j3c_pvxp1, j3c
-            
-            max_memory = int(mol.max_memory - lib.current_memory()[0])
-            blksize = max(4, int(max_memory*.06e6/8/nao**2/3))
-            vj = vk = vk2 = 0
-            p1 = 0
-            for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
-                t1 = (logger.process_clock(), logger.perf_counter())
-                log.debug1('2e SOC J/K1/K2 integrals [%d/%d]', istep+1, naoaux//blksize+1)
-                j3c_pvxp1, j3c = load(aux_slice)
-                p0, p1 = aux_slice
-                nrow = p1 - p0
-                j3c_pvxp1 = j3c_pvxp1.swapaxes(-1,-2).reshape(3,nao,nao,nrow)
-                j3c = lib.unpack_tril(j3c)
-                vj += lib.einsum('xijP,Pkl,kl->xij', j3c_pvxp1, j3c, sodm1)
-                vk += lib.einsum('xijP,Pkl,jk->xil', j3c_pvxp1, j3c, sodm1)
-                vk2 += lib.einsum('xijP,Pkl,li->xkj', j3c_pvxp1, j3c, sodm1)
-                log.timer_debug1('2e SOC J/K1/K2 integrals AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
-            t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
+        #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
+        t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
             
         hso2e = vj - 1.5 * vk - 1.5 * vk2
         
@@ -372,4 +303,14 @@ class SISO():
         self.calc_Y()
         self.calc_h()
         self.solve()
-        return 
+        return
+    
+    def density_fit(self, with_df=None):
+        from embed_sim.df import DFSISO
+        if with_df is None:
+            if not getattr(self.mc, 'with_df', False):
+                raise NotImplementedError
+            else:
+                with_df = self.mc.with_df
+        return DFSISO(self.title, self.mc, self.statelis, self.save_mag, self.save_Hmat, self.save_old_Hal, self.verbose, with_df)
+    

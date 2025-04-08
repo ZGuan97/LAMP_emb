@@ -57,6 +57,7 @@ def sacasscf_nevpt2(mc):
 from pyscf.fci.addons import _unpack_nelec
 def sacasscf_nevpt2_undo_ver(mc):
     from pyscf.mcscf.addons import StateAverageFCISolver
+    from pyscf.mcscf.df import _DFCAS
     if isinstance(mc.fcisolver, StateAverageFCISolver):
         spins = []
         nroots = []
@@ -73,7 +74,11 @@ def sacasscf_nevpt2_undo_ver(mc):
             nroot = nroots[i]
             for iroot in range(0, nroot):
                 print('spin', spin, 'iroot', iroot)
-                nevpt2 = mrpt.NEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
+                if isinstance(mc, _DFCAS):
+                    from embed_sim.df import DFNEVPT
+                    nevpt2 = DFNEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
+                else:
+                    nevpt2 = mrpt.NEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
                 e_corr = nevpt2.kernel()
                 e_corrs.append(e_corr)
@@ -86,6 +91,7 @@ def sacasscf_nevpt2_undo_ver(mc):
 def sacasscf_nevpt2_casci_ver(mc):
     print('sacasscf_nevpt2_casci_ver')
     from pyscf.mcscf.addons import StateAverageFCISolver
+    from pyscf.mcscf.df import _DFCAS
     if isinstance(mc.fcisolver, StateAverageFCISolver):
         spins = []
         nroots = []
@@ -104,7 +110,11 @@ def sacasscf_nevpt2_casci_ver(mc):
             nroot = nroots[i]
             for iroot in range(0, nroot):
                 print('spin', spin, 'iroot', iroot)
-                nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
+                if isinstance(mc, _DFCAS):
+                    from embed_sim.df import DFNEVPT
+                    nevpt2 = DFNEVPT(mc_ci, root=iroot)
+                else:
+                    nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
                 # nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 
                 e_corr = nevpt2.kernel()
