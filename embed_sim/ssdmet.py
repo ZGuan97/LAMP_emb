@@ -186,9 +186,9 @@ def make_es_int1e(mf_or_cas, fo_orb, es_orb):
     return es_int1e
 
 def make_es_int2e(mf, es_orb):
-    try:
+    if getattr(mf, 'with_df', False):
         es_int2e = mf.with_df.ao2mo(es_orb)
-    except AttributeError:
+    else:
         es_int2e = ao2mo.full(mf.mol, es_orb)
     return es_int2e
 
@@ -199,7 +199,7 @@ class SSDMET(lib.StreamObject):
     """
     single-shot DMET with impurity-environment partition
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, max_mem=64000,verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO):
         print('****** DMET ******')
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
@@ -436,3 +436,12 @@ class SSDMET(lib.StreamObject):
             e_nuc = self.mf_or_cas.energy_nuc()
             fo_ene += e_nuc
         return fo_ene
+    
+    def density_fit(self, with_df=None):
+        from embed_sim.df import DFSSDMET
+        if with_df is None:
+            if not getattr(self.mf_or_cas, 'with_df', False):
+                raise NotImplementedError
+            else:
+                with_df = self.mf_or_cas.with_df
+        return DFSSDMET(self.mf_or_cas,self.title,self.imp_idx, self.threshold, self.verbose, with_df)
