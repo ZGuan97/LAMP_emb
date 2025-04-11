@@ -436,7 +436,7 @@ class DFSISO(siso.SISO):
         
         t0 = (logger.process_clock(), logger.perf_counter())
         
-        auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=self.verbose)
+        auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s2ij', comp=3, verbose=self.verbose)
         def load(aux_slice):
             if self.with_df._cderi is None:
                 self.with_df.build()
@@ -454,9 +454,10 @@ class DFSISO(siso.SISO):
                     else:
                         j3c =  np.asarray(feri[b0:b1])
             return j3c_pvxp1, j3c
-        
+
+        nao_pair = nao*(nao+1)//2
         max_memory = int(mol.max_memory - lib.current_memory()[0])
-        blksize = max(4, int(max_memory*.06e6/8/nao**2/3))
+        blksize = max(4, int(max_memory*.06e6/8/nao_pair**2/3))
         vj = vk = vk2 = 0
         p1 = 0
         for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
@@ -465,11 +466,14 @@ class DFSISO(siso.SISO):
             j3c_pvxp1, j3c = load(aux_slice)
             p0, p1 = aux_slice
             nrow = p1 - p0
-            j3c_pvxp1 = j3c_pvxp1.swapaxes(-1,-2).reshape(3,nao,nao,nrow)
+            j3c_pvxp1 = lib.unpack_tril(j3c_pvxp1.reshape(3*nrow,-1),filltriu=2).reshape(3,nrow,nao,nao)
             j3c = lib.unpack_tril(j3c)
-            vj += lib.einsum('xijP,Pkl,kl->xij', j3c_pvxp1, j3c, sodm1)
-            vk += lib.einsum('xijP,Pkl,jk->xil', j3c_pvxp1, j3c, sodm1)
-            vk2 += lib.einsum('xijP,Pkl,li->xkj', j3c_pvxp1, j3c, sodm1)
+            vj += lib.einsum('xPij,Pkl,kl->xij', j3c_pvxp1, j3c, sodm1)
+            log.timer_debug1('contracting vj AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
+            vk += lib.einsum('xPij,Pkl,jk->xil', j3c_pvxp1, j3c, sodm1)
+            log.timer_debug1('contracting vk AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
+            vk2 += lib.einsum('xPij,Pkl,li->xkj', j3c_pvxp1, j3c, sodm1)
+            log.timer_debug1('contracting vk2 AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
             log.timer_debug1('2e SOC J/K1/K2 integrals AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
         t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
             
