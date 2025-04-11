@@ -434,8 +434,6 @@ class DFSISO(siso.SISO):
                 else:
                     naoaux = feri.shape[0]
         
-        t0 = (logger.process_clock(), logger.perf_counter())
-        
         auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s2ij', comp=3, verbose=self.verbose)
         def load(aux_slice):
             if self.with_df._cderi is None:
@@ -457,24 +455,27 @@ class DFSISO(siso.SISO):
 
         nao_pair = nao*(nao+1)//2
         max_memory = int(mol.max_memory - lib.current_memory()[0])
-        blksize = max(4, int(max_memory*.06e6/8/nao_pair**2/3))
+        blksize = max(16, int(max_memory*.06e6/8/nao_pair**2/3))
+        nstep = -(-naoaux//blksize)
         vj = vk = vk2 = 0
         p1 = 0
+        t0 = (logger.process_clock(), logger.perf_counter())
         for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
             t1 = (logger.process_clock(), logger.perf_counter())
-            log.debug1('2e SOC J/K1/K2 integrals [%d/%d]', istep+1, naoaux//blksize+1)
+            t2 = (logger.process_clock(), logger.perf_counter())
+            log.debug1('2e SOC J/K1/K2 integrals [%d/%d]', istep+1, nstep)
             j3c_pvxp1, j3c = load(aux_slice)
             p0, p1 = aux_slice
             nrow = p1 - p0
             j3c_pvxp1 = lib.unpack_tril(j3c_pvxp1.reshape(3*nrow,-1),filltriu=2).reshape(3,nrow,nao,nao)
             j3c = lib.unpack_tril(j3c)
             vj += lib.einsum('xPij,Pkl,kl->xij', j3c_pvxp1, j3c, sodm1)
-            log.timer_debug1('contracting vj AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
+            t2 = log.timer_debug1('contracting vj AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t2)
             vk += lib.einsum('xPij,Pkl,jk->xil', j3c_pvxp1, j3c, sodm1)
-            log.timer_debug1('contracting vk AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
+            t2 = log.timer_debug1('contracting vk AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t2)
             vk2 += lib.einsum('xPij,Pkl,li->xkj', j3c_pvxp1, j3c, sodm1)
-            log.timer_debug1('contracting vk2 AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
-            log.timer_debug1('2e SOC J/K1/K2 integrals AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
+            t2 = log.timer_debug1('contracting vk2 AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t2)
+            t1 = log.timer('2e SOC J/K1/K2 integrals [{}/{}]'.format(istep+1, nstep), *t1)
         t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
             
         hso2e = vj - 1.5 * vk - 1.5 * vk2
