@@ -200,7 +200,6 @@ class SSDMET(lib.StreamObject):
     single-shot DMET with impurity-environment partition
     """
     def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO):
-        print('****** DMET ******')
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
@@ -232,6 +231,11 @@ class SSDMET(lib.StreamObject):
         self.es_int2e = None
 
         self.es_mf = None
+
+    def dump_flags(self):
+        log = logger.new_logger(self, 4)
+        log.info('')
+        log.info('******** %s ********', self.__class__)
 
     @property
     def imp_idx(self):
@@ -325,6 +329,7 @@ class SSDMET(lib.StreamObject):
         return ldm, caolo, cloao
         
     def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
+        self.dump_flags()
         self.dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
         # self.dm = self.mf_or_cas.make_rdm1()
         if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)

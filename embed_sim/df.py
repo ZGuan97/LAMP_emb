@@ -15,7 +15,7 @@ from pyscf.ao2mo.outcore import _load_from_h5g
 from pyscf.data import nist
 from pyscf.lib import logger
 
-from embed_sim import ssdmet, siso
+from embed_sim import ssdmet, aodmet, siso
 
 def make_es_cderi(title, es_orb, with_df):
     erifile = title+'_es_cderi.h5'
@@ -40,7 +40,6 @@ class DFSSDMET(ssdmet.SSDMET):
     Density fitting single-shot DMET class
     """
     def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO, with_df=None):
-        print('****** DFDMET ******')
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
@@ -123,6 +122,7 @@ class DFSSDMET(ssdmet.SSDMET):
         return 
 
     def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
+        self.dump_flags()
         self.dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         # self.dm = self.mf_or_cas.make_rdm1()
         if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -134,6 +134,158 @@ class DFSSDMET(ssdmet.SSDMET):
             ldm, caolo, cloao = self.lowdin_orth(restore_imp)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = ssdmet.build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
+            caoes = caolo @ cloes
+
+            self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
+            self.fv_orb = caoes[:, nimp+nbath+nfo: nimp+nbath+nfo+nfv]
+            self.es_orb = caoes[:, :nimp+nbath]
+        
+            self.nfo = nfo
+            self.nfv = nfv
+            self.nes = nimp + nbath
+            print('number of impurity orbitals', nimp)
+            print('number of bath orbitals', nbath)
+            print('number of frozen occupied orbitals', nfo)
+            print('number of frozen virtual orbitals', nfv)
+
+            self.es_int1e = self.make_es_int1e()
+            self.es_cderi = self.make_es_cderi()
+
+        chk_fname_save = self.title + '_dmet_chk.h5'
+        if save_chk:
+            self.save_chk(chk_fname_save)
+        self.es_mf = self.ROHF()
+        print('energy from frozen occupied orbitals', self.fo_ene())
+        return self.es_mf
+    
+    def ROHF(self, run_mf=False):
+       mol = gto.M()
+       mol.verbose = self.verbose
+       mol.incore_anyway = True
+       mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+       mol.spin = self.mol.spin
+
+       es_mf = scf.rohf.ROHF(mol).x2c().density_fit()
+       es_mf.max_memory = self.max_mem
+       es_mf.mo_energy = np.zeros((self.nes))
+
+       es_mf.get_hcore = lambda *args: self.es_int1e
+       es_mf.get_ovlp = lambda *args: np.eye(self.nes)
+       es_mf.with_df._cderi = self.es_cderi
+
+       es_dm = np.zeros((2, self.nes, self.nes))
+       es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
+       es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
+       self.es_dm = es_dm
+       es_mf.mo_coeff = np.eye(self.nes)
+
+       # assume we only perfrom ROHF-in-ROHF embedding
+
+       # assert np.einsum('ijj->', es_dm) == mol.nelectron
+       if run_mf:
+           es_mf.kernel(es_dm)
+           self.es_occ = es_mf.mo_occ
+       return es_mf
+    
+class DFAODMET(aodmet.AODMET):
+    """
+    Density fitting single-shot AO-DMET class
+    """
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO, with_df=None):
+        self.mf_or_cas = mf_or_cas
+        self.mol = self.mf_or_cas.mol
+        self.title = title
+        self.max_mem = mf_or_cas.max_memory # TODO
+        self.verbose = verbose # TODO
+        self.with_df = with_df
+
+        # inputs
+        self.dm = None
+        self._imp_idx = []
+        if imp_idx is not None:
+            self.imp_idx = imp_idx
+        else:
+            print('impurity index not assigned, use the first atom as impurity')
+            self.imp_idx = self.mol.atom_symbol(0)
+        self.threshold = threshold
+
+        # NOT inputs
+        self.fo_orb = None
+        self.fv_orb = None
+        self.es_orb = None
+        self.es_occ = None
+
+        self.nfo = None
+        self.nfv = None
+        self.nes = None
+
+        self.es_int1e = None
+        self.es_cderi = None
+
+        self.es_mf = None
+    
+    def make_es_cderi(self):
+        return make_es_cderi(self.title, self.es_orb, self.with_df)
+    
+    def load_chk(self, chk_fname):
+        try:
+            if not '_dmet_chk.h5' in chk_fname:
+                chk_fname = chk_fname + '_dmet_chk.h5'
+            if not os.path.isfile(chk_fname):
+                return False
+        except:
+            return False
+
+        print(f'load chk file {chk_fname}')
+        with h5py.File(chk_fname, 'r') as fh5:
+            dm_check = np.allclose(self.dm, fh5['dm'][:], atol=1e-5)
+            imp_idx_check = ssdmet.compare_imp_idx(self.imp_idx, fh5['imp_idx'][:])
+            threshold_check = self.threshold == fh5['threshold'][()]
+            if dm_check & imp_idx_check & threshold_check:
+                self.fo_orb = fh5['fo_orb'][:]
+                self.fv_orb = fh5['fv_orb'][:]
+                self.es_orb = fh5['es_orb'][:]
+                self.es_occ = fh5['es_occ'][:]
+                self.es_int1e = fh5['es_int1e'][:]
+                self.es_cderi = self.title+'_es_cderi.h5'
+
+                self.nfo = np.shape(self.fo_orb)[1]
+                self.nfv = np.shape(self.fv_orb)[1]
+                self.nes = np.shape(self.es_orb)[1]
+                return True
+            else:
+                print(f'density matrix check {dm_check}')
+                print(f'impurity index check {imp_idx_check}')
+                print(f'threshold check {threshold_check}')
+                print(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
+                return False
+    
+    def save_chk(self, chk_fname):
+        with h5py.File(chk_fname, 'w') as fh5:
+            fh5['dm'] = self.dm
+            fh5['imp_idx'] = self.imp_idx
+            fh5['threshold'] = self.threshold
+
+            fh5['fo_orb'] = self.fo_orb
+            fh5['fv_orb'] = self.fv_orb
+            fh5['es_orb'] = self.es_orb
+            fh5['es_occ'] = self.es_occ
+            fh5['es_int1e'] = self.es_int1e
+        return 
+
+    def build(self, chk_fname_load='', save_chk=True):
+        self.dump_flags()
+        self.dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
+        # self.dm = self.mf_or_cas.make_rdm1()
+        if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
+            self.dm = self.dm[0] + self.dm[1]
+
+        loaded = self.load_chk(chk_fname_load)
+        
+        if not loaded:
+            ldm, caolo, cloao, ovlp = self.lowdin_orth()
+
+            cloes, nimp, nbath, nfo, nfv, self.es_occ = aodmet.build_embeded_subspace(ldm, self.imp_idx, caolo, ovlp, thres=self.threshold)
             caoes = caolo @ cloes
 
             self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
