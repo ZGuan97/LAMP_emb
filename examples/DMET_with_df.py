@@ -76,11 +76,11 @@ np.savetxt(mydmet.title+'_opt.txt',(es_cas.fcisolver.e_states-np.min(es_cas.fcis
 Density fitting can be used to accelerate the calculation of SOC 2e integrals
 by setting a DF object to the with_df attribute.
 '''
-mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=5).density_fit()
+mysiso = siso.SISO(title, total_cas, verbose=5).density_fit()
 '''
 Set verbose greater than 5 will output detailed information for 2e SOC J/K1/K2 contraction.
 '''
-mysiso = siso.SISO(title, total_cas, with_df=mf.with_df, verbose=6).density_fit()
+mysiso = siso.SISO(title, total_cas, verbose=6).density_fit()
 mysiso.verbose = 9
 
 mysiso.kernel()
