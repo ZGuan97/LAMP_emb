@@ -73,11 +73,11 @@ def sacasscf_nevpt2_undo_ver(mc):
             mc.fcisolver.spin = spin
             nroot = nroots[i]
             for iroot in range(0, nroot):
-                print('spin', spin, 'iroot', iroot)
                 if isinstance(mc, _DFCAS):
                     from embed_sim.df import DFNEVPT
-                    nevpt2 = DFNEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
+                    nevpt2 = DFNEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int), spin=spin)
                 else:
+                    print('spin', spin, 'iroot', iroot)
                     nevpt2 = mrpt.NEVPT(mc, root=iroot+np.sum(nroots[:i],dtype=int))
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
                 e_corr = nevpt2.kernel()
@@ -109,11 +109,11 @@ def sacasscf_nevpt2_casci_ver(mc):
             mc_ci.kernel(mc.mo_coeff)
             nroot = nroots[i]
             for iroot in range(0, nroot):
-                print('spin', spin, 'iroot', iroot)
                 if isinstance(mc, _DFCAS):
                     from embed_sim.df import DFNEVPT
-                    nevpt2 = DFNEVPT(mc_ci, root=iroot)
+                    nevpt2 = DFNEVPT(mc_ci, root=iroot, spin=spin)
                 else:
+                    print('spin', spin, 'iroot', iroot)
                     nevpt2 = mrpt.NEVPT(mc_ci, root=iroot)
                 nevpt2.verbose = logger.INFO-1 # when verbose=logger.INFO, meta-lowdin localization is called and cause error in DMET-NEVPT2
                 # nevpt2.verbose = 0 # when verbose=logger.INFO, meta-lowdin localization is 

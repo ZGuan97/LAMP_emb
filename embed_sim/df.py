@@ -192,8 +192,9 @@ class DFNEVPT(NEVPT):
         'ncore', 'root', 'compressed_mps', 'e_corr', 'canonicalized', 'onerdm',
     }.union(casci.CASBase._keys, mc1step.CASSCF._keys)
 
-    def __init__(self, mc, root=0, dump_flags_verbose=4):
+    def __init__(self, mc, root=0, spin=0, dump_flags_verbose=4):
         super().__init__(mc, root)
+        self.spin = spin
         self.dump_flags_verbose = dump_flags_verbose
 
     def dump_flags(self, verbose=None):
@@ -205,7 +206,7 @@ class DFNEVPT(NEVPT):
         nvir = self.mo_coeff.shape[1] - ncore - ncas
         log.info('DFNEVPT2 (%de+%de, %do), ncore = %d, nvir = %d',
                  self.nelecas[0], self.nelecas[1], ncas, ncore, nvir)
-        log.info('root = %d', self.root)
+        log.info('spin = %d  root = %d', self.spin, self.root)
         
     def kernel(self):
         self.dump_flags(self.dump_flags_verbose)
