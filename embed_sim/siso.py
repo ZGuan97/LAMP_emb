@@ -364,7 +364,7 @@ class SISO():
             for j in range(0, ncomp):
                 with np.printoptions(precision=3, suppress=True):
                     print(f'(S, MS, I), {self.idx2state(arg_sort_coeff[j])}\t coeff\t {coeff[arg_sort_coeff[j]]:.3f}\t |coeff| ** 2\t {np.linalg.norm(coeff[arg_sort_coeff[j]])**2:.3f}')
-        print(f'mag energy {mag_ene[:20]}')
+        print(f'mag energy {mag_ene[:24]}')
         return 
             
     def kernel(self):

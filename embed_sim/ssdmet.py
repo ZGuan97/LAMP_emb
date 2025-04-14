@@ -305,18 +305,18 @@ class SSDMET(lib.StreamObject):
         caolo, cloao = lowdin_orth(self.mol)
         if restore_imp:
             imp_idx = self.imp_idx
+            mask_env = np.ones(len(caolo), dtype=bool)
+            mask_env[imp_idx] = False
 
             Q1 = cloao[:, imp_idx]
             Q1, _ = np.linalg.qr(Q1) # orthonormalize
             P = np.eye(*cloao.shape) - Q1 @ Q1.T.conj()
-            B = P @ cloao[:, 45:]
+            B = P @ cloao[:, mask_env]
             from scipy.linalg import svd
             U, S, Vh = svd(B, full_matrices=False)
 
             Q = np.zeros(cloao.shape)
             Q[:, imp_idx] = Q1
-            mask_env = np.ones(len(Q), dtype=bool)
-            mask_env[imp_idx] = False
             Q[:, mask_env] = U[:, 0: cloao.shape[0] - len(imp_idx)]
             cloao = Q.T.conj() @ cloao
             caolo = caolo @ Q
