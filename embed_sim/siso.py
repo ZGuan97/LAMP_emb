@@ -39,23 +39,12 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
     for str0, tab in enumerate(ades_index):
         for _, i, str1, sign in tab:
             t1bra[str1,:,i] += sign * bra[str0,:]
-    dm1 = np.einsum('abp,abq->pq', t1bra, t1ket)
+    dm1 = lib.einsum('abp,abq->pq', t1bra, t1ket)
     return dm1
-
-def auxe2(mol, auxmol, title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=5):
-    feri_name = title+'_'+int3c+'.h5'
-    if not os.path.exists(feri_name):
-        log = logger.Logger(mol.stdout, verbose)
-        t0 = (logger.process_clock(), logger.perf_counter())
-        df.outcore.cholesky_eri_b(mol, feri_name, auxbasis=auxmol.basis, int3c=int3c, aosym=aosym, comp=comp, verbose=verbose)
-        t0 = log.timer('int3c2e_pvxp1', *t0)
-    else:
-        print('Load from {}'.format(feri_name))
-    return
 
 # SISO object for SOC calculation, based on multi-configuration calculation 
 class SISO():
-    def __init__(self, title, mc, statelis=None, with_df=None, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):
+    def __init__(self, title, mc, statelis=None, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):        
         self.title = title
         self.mol = mc.mol
         self.mc = mc
@@ -85,10 +74,6 @@ class SISO():
         self.SOC_Hamiltonian = np.zeros((self.nstates, self.nstates), dtype = complex)
         self.full_trans_dm = np.zeros((self.nstates, self.nstates, self.mc.ncas, self.mc.ncas), dtype = complex)
 
-        self.with_df = with_df
-        if self.with_df is not None:
-            if not isinstance(self.with_df, df.df.DF):
-                raise NotImplementedError
         self.save_mag = save_mag
         self.save_Hmat = save_Hmat
         self.save_old_Hal = save_old_Hal
@@ -136,12 +121,12 @@ class SISO():
 
         # dm[p,q] = <|q^+ p|>
 
-        ang_mom_core =np.einsum('ijk, jk->i', ang_mom_1e, dm1core)
+        ang_mom_core = lib.einsum('ijk, jk->i', ang_mom_1e, dm1core)
         as_mo_tdm1 = self.make_full_trans_dm()
         mocas = self.mc.mo_coeff[:, self.mc.ncore: self.mc.ncore+self.mc.ncas]
         ang_mom_act_mo = np.einsum('ijk, ja, bk->abi', ang_mom_1e, mocas, mocas.conj().T)
 
-        ang_mom_act = np.einsum('abi, mnba->mni', ang_mom_act_mo, as_mo_tdm1)
+        ang_mom_act = lib.einsum('abi, mnba->mni', ang_mom_act_mo, as_mo_tdm1)
         ang_mom = ang_mom_core + ang_mom_act
 
         return ang_mom
@@ -179,10 +164,10 @@ class SISO():
         mocas = self.mc.mo_coeff[:, self.mc.ncore: self.mc.ncore+self.mc.ncas]
         dm1b = np.dot(mocore, mocore.conj().T)
 
-        ao_tdm1 = np.einsum('ia, mnab, bj->mnij', mocas, as_mo_tdm1, mocas.conj().T)
+        ao_tdm1 = lib.einsum('ia, mnab, bj->mnij', mocas, as_mo_tdm1, mocas.conj().T)
         tdm1 = dm1b + ao_tdm1
 
-        ang_mom = np.einsum('ijk, mnkj->mni', ang_mom_1e, tdm1)
+        ang_mom = lib.einsum('ijk, mnkj->mni', ang_mom_1e, tdm1)
         return ang_mom
 
     def calc_z(self):
@@ -194,67 +179,13 @@ class SISO():
         sodm1 = self.mc.make_rdm1()
 
         # 2e SOC J/K1/K2 integrals
-        if self.with_df is None:
-            # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
-            log = logger.Logger(self.mol.stdout, self.verbose)
-            t0 = (logger.process_clock(), logger.perf_counter())
-            vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
+        # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
+        log = logger.Logger(self.mol.stdout, self.verbose)
+        t0 = (logger.process_clock(), logger.perf_counter())
+        vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
 
-            #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
-            t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
-        else:
-            print('SISO with density fitting', self.with_df)
-            mol = self.with_df.mol
-            auxmol = self.with_df.auxmol
-            nao = mol.nao
-            with df.addons.load(self.with_df._cderi, self.with_df._dataname) as feri:
-                if isinstance(feri, np.ndarray):
-                    naoaux = feri.shape[0]
-                else:
-                    if isinstance(feri, h5py.Group):
-                        naoaux = feri['0'].shape[0]
-                    else:
-                        naoaux = feri.shape[0]
-            
-            log = logger.Logger(self.mol.stdout, self.verbose)
-            t0 = (logger.process_clock(), logger.perf_counter())
-            
-            auxe2(mol, auxmol, self.title, int3c='int3c2e_pvxp1', aosym='s1', comp=3, verbose=self.verbose)
-            def load(aux_slice):
-                if self.with_df._cderi is None:
-                    self.with_df.build()
-                
-                feri_name = self.title+'_int3c2e_pvxp1.h5'
-                b0, b1 = aux_slice
-                with df.addons.load(feri_name, 'j3c') as feri:
-                    j3c_pvxp1 = _load_from_h5g(feri, b0, b1)
-                with df.addons.load(self.with_df._cderi, self.with_df._dataname) as feri:
-                    if isinstance(feri, np.ndarray):
-                        j3c =  np.asarray(feri[b0:b1], order='C')
-                    else:
-                        if isinstance(feri, h5py.Group):
-                            j3c = _load_from_h5g(feri, b0, b1)
-                        else:
-                            j3c =  np.asarray(feri[b0:b1])
-                return j3c_pvxp1, j3c
-            
-            max_memory = int(mol.max_memory - lib.current_memory()[0])
-            blksize = max(4, int(max_memory*.06e6/8/nao**2/3))
-            vj = vk = vk2 = 0
-            p1 = 0
-            for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
-                t1 = (logger.process_clock(), logger.perf_counter())
-                log.debug1('2e SOC J/K1/K2 integrals [%d/%d]', istep+1, naoaux//blksize+1)
-                j3c_pvxp1, j3c = load(aux_slice)
-                p0, p1 = aux_slice
-                nrow = p1 - p0
-                j3c_pvxp1 = j3c_pvxp1.swapaxes(-1,-2).reshape(3,nao,nao,nrow)
-                j3c = lib.unpack_tril(j3c)
-                vj += lib.einsum('xijP,Pkl,kl->xij', j3c_pvxp1, j3c, sodm1)
-                vk += lib.einsum('xijP,Pkl,jk->xil', j3c_pvxp1, j3c, sodm1)
-                vk2 += lib.einsum('xijP,Pkl,li->xkj', j3c_pvxp1, j3c, sodm1)
-                log.timer_debug1('2e SOC J/K1/K2 integrals AO [{}/{}], nrow = {}'.format(p0, p1, nrow), *t1)
-            t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
+        #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
+        t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
             
         hso2e = vj - 1.5 * vk - 1.5 * vk2
         
@@ -289,7 +220,7 @@ class SISO():
 
                     for m in range(0, 3): # -1, 0, 1
                         if np.abs(wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2)) > 1e-8:
-                            Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * np.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
+                            Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 0, S1/2) * lib.einsum('ij,ij->', self.z[m], 1/2 * (t_dm1[0] - t_dm1[1]))
                         else:
                             Y[m, I1, I2] = 0
         
@@ -299,7 +230,7 @@ class SISO():
                     t_dm1 = make_rdm1_splus(mc.ci[I2], mc.ci[I1], mc.ncas, mc.nelecas, spin = S1) # shape (ncas, ncas)
                     
                     for m in range(0, 3): # -1, 0, 1
-                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 1, S1/2) * np.einsum('ij,ij->', self.z[m], - 1 / np.sqrt(2) * t_dm1)
+                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, 1, S1/2) * lib.einsum('ij,ij->', self.z[m], - 1 / np.sqrt(2) * t_dm1)
 
             elif S1 - S2 == 2: # z_+1 s_-1
                 for I1, I2 in itertools.product(self.casscf_state_idx[S1],
@@ -307,7 +238,7 @@ class SISO():
                     t_dm1 = make_rdm1_splus(mc.ci[I1], mc.ci[I2], mc.ncas, mc.nelecas, spin = S2).conj().T # shape (ncas, ncas), hermitian conjugate of splus matrix element
                     
                     for m in range(0, 3): # -1, 0, 1
-                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, -1, S1/2) * np.einsum('ij,ij->', self.z[m], 1 / np.sqrt(2) * t_dm1)
+                        Y[m, I1, I2] = 1 / wigner_3j(S2/2, 1, S1/2, -S2/2, -1, S1/2) * lib.einsum('ij,ij->', self.z[m], 1 / np.sqrt(2) * t_dm1)
         self.Y = Y
     
     def calc_h(self):
@@ -372,4 +303,14 @@ class SISO():
         self.calc_Y()
         self.calc_h()
         self.solve()
-        return 
+        return
+    
+    def density_fit(self, with_df=None):
+        from embed_sim.df import DFSISO
+        if with_df is None:
+            if not getattr(self.mc, 'with_df', False):
+                raise NotImplementedError
+            else:
+                with_df = self.mc.with_df
+        return DFSISO(self.title, self.mc, self.statelis, self.save_mag, self.save_Hmat, self.save_old_Hal, self.verbose, with_df)
+    
