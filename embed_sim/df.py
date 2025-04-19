@@ -574,6 +574,7 @@ class DFSISO(siso.SISO):
 
         # 2e SOC J/K1/K2 integrals
         log = logger.Logger(self.mol.stdout, self.verbose)
+        t0 = (logger.process_clock(), logger.perf_counter())
         log.info('SISO with density fitting')
         mol = self.with_df.mol
         auxmol = self.with_df.auxmol
@@ -612,7 +613,6 @@ class DFSISO(siso.SISO):
         nstep = -(-naoaux//blksize)
         vj = vk = vk2 = 0
         p1 = 0
-        t0 = (logger.process_clock(), logger.perf_counter())
         for istep, aux_slice in enumerate(lib.prange(0, naoaux, blksize)):
             t1 = (logger.process_clock(), logger.perf_counter())
             t2 = (logger.process_clock(), logger.perf_counter())
