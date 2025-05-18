@@ -15,7 +15,7 @@ title = 'BCpErCOT'
 mf = scf.rohf.ROHF(mol).x2c().density_fit()
 mf.chkfile = title+'.chk'
 mf.init_guess = 'atom'
-mf.level_shift = 1.0
+mf.level_shift = 2.0
 mf.conv_tol = 1e-2
 mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Er.*f']),power=0.)
 mf.diis.filename = title+'_diis.h5'
