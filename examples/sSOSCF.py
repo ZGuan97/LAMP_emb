@@ -25,9 +25,13 @@ mf.kernel()
 
 mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Er.*')
 mydmet.build(save_chk=False)
-es_mf = mydmet.ROHF().newton()
-es_mf.max_cycle = 100
+es_mf = mydmet.ROHF()
+es_mf.level_shift = 2.0
+es_mf.max_cycle = 0
 es_mf.kernel(mydmet.es_dm)
+es_mf = es_mf.newton()
+es_mf.max_cycle = 100
+es_mf.kernel()
 
 mf.conv_tol = 1e-5
 dm_core = mydmet.fo_orb@mydmet.fo_orb.conj().T
@@ -39,9 +43,13 @@ mf.kernel(dm)
 
 mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Er.*')
 mydmet.build(save_chk=False)
-es_mf = mydmet.ROHF().newton()
-es_mf.max_cycle = 100
+es_mf = mydmet.ROHF()
+es_mf.level_shift = 2.0
+es_mf.max_cycle = 0
 es_mf.kernel(mydmet.es_dm)
+es_mf = es_mf.newton()
+es_mf.max_cycle = 100
+es_mf.kernel()
 
 mf.conv_tol = 1e-8
 dm_core = mydmet.fo_orb@mydmet.fo_orb.conj().T
