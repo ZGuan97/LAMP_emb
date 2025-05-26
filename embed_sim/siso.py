@@ -426,9 +426,12 @@ class SISO():
                     ao_dip = mol.intor_symmetric('int1e_r', comp=3)
                 else:
                     ao_dip = mol.intor('int1e_ipovlp', comp=3, hermi=2)
+            ao_m = -mol.intor('int1e_cg_irxp', comp=3, hermi=2)
         mo_cas = mc.mo_coeff[:,mc.ncore:mc.ncore+mc.ncas]
         z = np.asarray([reduce(np.dot, (mo_cas.T, x.T, mo_cas)) for x in ao_dip])
+        z_m = np.asarray([reduce(np.dot, (mo_cas.T, x.T, mo_cas)) for x in ao_m])
         tdm = np.zeros((3, self.nstates, self.nstates))
+        m_pol = np.zeros((3, self.nstates, self.nstates))
         for idx1, idx2 in itertools.product(range(self.nstates), range(self.nstates)):
             S1, MS1, I1 = self.idx2state(idx1)
             S2, MS2, I2 = self.idx2state(idx2)
@@ -437,6 +440,7 @@ class SISO():
                 mc.nelecas = unpack_nelec(mc.nelecas, spin=mc.fcisolver.spin)
                 t_dm1 = mc.fcisolver.trans_rdm1(mc.ci[self.casscf_state_idx[S2][I2]], mc.ci[self.casscf_state_idx[S1][I1]], mc.ncas, mc.nelecas)
                 tdm[:,idx2,idx1] = lib.einsum('xij,ji->x',z,t_dm1)
+                m_pol[:,idx2,idx1] = lib.einsum('xij,ji->x',z_m,t_dm1)
         
         for state in states:
             tdm_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in tdm])[:, state])
@@ -479,4 +483,23 @@ class SISO():
                                 '%.6f'%np.abs(2/3*mag_ene[i]*D2),
                                 '%.6f'%D2])
                 log.info('%s', tb)
-    
+
+            m_pol_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in m_pol])[:, state])
+            mag_ene = myeigval - myeigval[state]
+            log.info('')
+            log.info('The transition magnetic dipole moment for state %s', state)
+            tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)',
+                                          '|Mx| (a.u.)','|My| (a.u.)','|Mz| (a.u.)'])
+            tb.align = 'c'
+            tb.hrules = 3
+            tb.vrules = 2
+            for name in tb.field_names[:3]:
+                tb.align[name] = 'r'
+            for i in range(self.nstates):
+                D2 = np.linalg.norm(tdm_so[:,i])**2
+                tb.add_row(['%s'%i,
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*1e7/nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                            '%.6f'%m_pol_so[0,i],'%.6f'%m_pol_so[1,i],'%.6f'%m_pol_so[2,i]])
+            log.info('%s', tb)
