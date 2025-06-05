@@ -28,8 +28,11 @@ mydmet.build(save_chk=False)
 es_mf = mydmet.ROHF()
 es_mf.level_shift = 2.0
 es_mf.max_cycle = 0
+es_mf.verbose = 0
 es_mf.kernel(mydmet.es_dm)
+es_mf.mo_occ = es_mf.get_occ()
 es_mf = es_mf.newton()
+es_mf.verbose = 4
 es_mf.max_cycle = 100
 es_mf.kernel()
 
@@ -46,8 +49,11 @@ mydmet.build(save_chk=False)
 es_mf = mydmet.ROHF()
 es_mf.level_shift = 2.0
 es_mf.max_cycle = 0
+es_mf.verbose = 0
 es_mf.kernel(mydmet.es_dm)
+es_mf.mo_occ = es_mf.get_occ()
 es_mf = es_mf.newton()
+es_mf.verbose = 4
 es_mf.max_cycle = 100
 es_mf.kernel()
 
