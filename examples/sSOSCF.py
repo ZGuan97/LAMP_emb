@@ -41,7 +41,7 @@ dm_core = mydmet.fo_orb@mydmet.fo_orb.conj().T
 dm = (mydmet.es_orb@es_mf.make_rdm1()[0]@mydmet.es_orb.conj().T+dm_core,
       mydmet.es_orb@es_mf.make_rdm1()[1]@mydmet.es_orb.conj().T+dm_core)
 mf.max_cycle = 100
-mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Er.*f']),power=0.).restore(title+'_diis.h5')
+mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Er.*f']),power=0.)
 mf.kernel(dm)
 
 mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Er.*')
@@ -62,6 +62,6 @@ dm_core = mydmet.fo_orb@mydmet.fo_orb.conj().T
 dm = (mydmet.es_orb@es_mf.make_rdm1()[0]@mydmet.es_orb.conj().T+dm_core,
       mydmet.es_orb@es_mf.make_rdm1()[1]@mydmet.es_orb.conj().T+dm_core)
 mf.max_cycle = 200
-mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Er.*f']),power=0.).restore(title+'_diis.h5')
+mf.diis = rdiis.RDIIS(rdiis_prop='dS',imp_idx=mol.search_ao_label(['Er.*f']),power=0.)
 mf.conv_check = True
 mf.kernel(dm)
