@@ -3,6 +3,8 @@ from scipy.special import comb
 import itertools 
 from sympy.physics.wigner import wigner_3j
 import os
+from collections.abc import Iterable
+import prettytable
 
 from pyscf import scf
 from pyscf.scf import jk
@@ -44,7 +46,7 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
 
 # SISO object for SOC calculation, based on multi-configuration calculation 
 class SISO():
-    def __init__(self, title, mc, statelis=None, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):        
+    def __init__(self, title, mc, statelis=None, amfi=False, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):        
         self.title = title
         self.mol = mc.mol
         self.mc = mc
@@ -74,6 +76,8 @@ class SISO():
         self.SOC_Hamiltonian = np.zeros((self.nstates, self.nstates), dtype = complex)
         self.full_trans_dm = np.zeros((self.nstates, self.nstates, self.mc.ncas, self.mc.ncas), dtype = complex)
 
+        self.amfi = amfi
+        self.with_df = False
         self.save_mag = save_mag
         self.save_Hmat = save_Hmat
         self.save_old_Hal = save_old_Hal
@@ -172,7 +176,22 @@ class SISO():
 
     def calc_z(self):
         # 1e SOC integrals
-        hso1e = self.mol.intor('int1e_pnucxp',3)
+        if self.amfi:
+            nao = self.mol.nao
+            hso1e = np.zeros((3,nao,nao))
+            aoslices = self.mol.aoslice_by_atom()
+            natm = self.mol.natm
+            for atm_id in range(natm):
+                bas_start, bas_end, ao_start, ao_end = aoslices[atm_id]
+                nao_atm = ao_end - ao_start
+                shls_slice = (bas_start,bas_end,bas_start,bas_end)
+                with self.mol.with_rinv_as_nucleus(atm_id):
+                    z = -self.mol.atom_charge(atm_id)
+                    hso1e[:,ao_start:ao_end,ao_start:ao_end] = z * self.mol.intor('int1e_prinvxp', comp=3, shls_slice=shls_slice)
+        else:
+            hso1e = self.mol.intor('int1e_pnucxp',3)
+        if self.mol.has_ecp_soc():
+            hso1e -= 0.5*self.mol.intor('ECPso')
 
         # All electron SISO
         mo_cas = self.mc.mo_coeff[:,self.mc.ncore:self.mc.ncore+self.mc.ncas]
@@ -182,7 +201,24 @@ class SISO():
         # SOC_2e integrals are anti-symmetric towards exchange (ij|kl) -> (ji|kl) TODO
         log = logger.Logger(self.mol.stdout, self.verbose)
         t0 = (logger.process_clock(), logger.perf_counter())
-        vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
+        if self.amfi:
+            nao = self.mol.nao
+            vj = np.zeros((3,nao,nao))
+            vk = np.zeros((3,nao,nao))
+            vk2 = np.zeros((3,nao,nao))
+            aoslices = self.mol.aoslice_by_atom()
+            natm = self.mol.natm
+            for atm_id in range(natm):
+                bas_start, bas_end, ao_start, ao_end = aoslices[atm_id]
+                nao_atm = ao_end - ao_start
+                shls_slice = (bas_start,bas_end,bas_start,bas_end,bas_start,bas_end,bas_start,bas_end)
+                p1vxp1 = self.mol.intor('int2e_p1vxp1', comp=3, aosym='s2kl', shls_slice=shls_slice)
+                p1vxp1 = lib.unpack_tril(p1vxp1.reshape(3*nao_atm**2,-1)).reshape(3,nao_atm,nao_atm,nao_atm,nao_atm)
+                vj[:,ao_start:ao_end,ao_start:ao_end] = lib.einsum('xijkl,kl->xij',p1vxp1,sodm1[ao_start:ao_end,ao_start:ao_end])
+                vk[:,ao_start:ao_end,ao_start:ao_end] = lib.einsum('xijkl,jk->xil',p1vxp1,sodm1[ao_start:ao_end,ao_start:ao_end])
+                vk2[:,ao_start:ao_end,ao_start:ao_end] = lib.einsum('xijkl,li->xkj',p1vxp1,sodm1[ao_start:ao_end,ao_start:ao_end])
+        else:
+            vj,vk,vk2 = jk.get_jk(self.mol,[sodm1,sodm1,sodm1],['ijkl,kl->ij','ijkl,jk->il','ijkl,li->kj'],intor='int2e_p1vxp1', comp=3)
 
         #vj,vk,vk2 = mpi_jk.get_jk(mol,np.asarray([sodm1]),hermi=0)
         t0 = log.timer('2e SOC J/K1/K2 integrals', *t0)
@@ -295,7 +331,7 @@ class SISO():
             for j in range(0, ncomp):
                 with np.printoptions(precision=3, suppress=True):
                     print(f'(S, MS, I), {self.idx2state(arg_sort_coeff[j])}\t coeff\t {coeff[arg_sort_coeff[j]]:.3f}\t |coeff| ** 2\t {np.linalg.norm(coeff[arg_sort_coeff[j]])**2:.3f}')
-        print(f'mag energy {mag_ene[:24]}')
+        print(f'mag energy {mag_ene[:20]}')
         return 
             
     def kernel(self):
@@ -314,3 +350,156 @@ class SISO():
                 with_df = self.mc.with_df
         return DFSISO(self.title, self.mc, self.statelis, self.save_mag, self.save_Hmat, self.save_old_Hal, self.verbose, with_df)
     
+    def analyze(self, states=0, picture_change=True, gauge='length', order=0):
+        '''
+        Calculate oscillator strength and transition dipole moment between SOC states
+
+        Args:
+            states: integer or a list
+                The index of states for analysis
+            picture_change: Boolean
+                If scalar relativistic effect is considered via X2C,
+                picture_change can set to be True to eliminate
+                picture change error (can be neglected since PCE is
+                small for properties related with valence electrons).
+            gauge: string
+                The gauge for transition dipole moment
+                gauge = 'length':  <i|r|j>
+                gauge = 'velocity: TODO
+            order: integer
+                The order of multipole expansion when using velocity gauge, TODO
+        '''
+
+        def _charge_center(mol):
+            charges = mol.atom_charges()
+            coords  = mol.atom_coords()
+            return np.einsum('z,zr->r', charges, coords)/charges.sum()
+        myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
+        mol = self.mol
+        mc = self.mc
+        with_x2c = getattr(self.mc._scf, 'with_x2c', None)
+
+        log = logger.new_logger(self, 4)
+        log.info('')
+        log.info('******** %s ********', 'siso.analyze')
+        if isinstance(states, int):
+            if states >= self.nstates:
+                raise IndexError('states index out of range')
+        elif isinstance(states, Iterable):
+            states = np.asarray(states, dtype=int)
+            if states.max() >= self.nstates:
+                raise IndexError('states index out of range')
+        else:
+            raise NotImplementedError
+        
+        if picture_change and with_x2c is None:
+            picture_change = False
+            log.warn('Picture change is only needed when X2C is applied.')
+            
+        if gauge.lower() != 'length':
+            raise NotImplementedError
+        else:
+            gauge = gauge.lower()
+        
+        log.info('states = %s', states)
+        log.info('with_x2c = %s', with_x2c)
+        log.info('picture_change = %s', picture_change)
+        log.info('gauge = %s', gauge)
+        if gauge != 'length':
+            if order > 0:
+                raise NotImplementedError
+            else:
+                log.info('order = %s', order)
+
+        if isinstance(states, int):
+            states = [states]
+
+        with mol.with_common_orig(_charge_center(self.mol)):
+            if picture_change:
+                xmol = with_x2c.get_xmol()[0]
+                nao = xmol.nao
+                prp = xmol.intor_symmetric('int1e_sprsp').reshape(3,4,nao,nao)[:,3]
+                c1 = 0.5/lib.param.LIGHT_SPEED
+                ao_dip = with_x2c.picture_change(('int1e_r', prp*c1**2))
+            else:
+                if gauge == 'length':
+                    ao_dip = mol.intor_symmetric('int1e_r', comp=3)
+                else:
+                    ao_dip = mol.intor('int1e_ipovlp', comp=3, hermi=2)
+            ao_m = -mol.intor('int1e_cg_irxp', comp=3, hermi=2)
+        mo_cas = mc.mo_coeff[:,mc.ncore:mc.ncore+mc.ncas]
+        z = np.asarray([reduce(np.dot, (mo_cas.T, x.T, mo_cas)) for x in ao_dip])
+        z_m = np.asarray([reduce(np.dot, (mo_cas.T, x.T, mo_cas)) for x in ao_m])
+        tdm = np.zeros((3, self.nstates, self.nstates))
+        m_pol = np.zeros((3, self.nstates, self.nstates))
+        for idx1, idx2 in itertools.product(range(self.nstates), range(self.nstates)):
+            S1, MS1, I1 = self.idx2state(idx1)
+            S2, MS2, I2 = self.idx2state(idx2)
+            if S1 == S2 and MS1 == MS2:
+                mc.fcisolver.spin = S1
+                mc.nelecas = unpack_nelec(mc.nelecas, spin=mc.fcisolver.spin)
+                t_dm1 = mc.fcisolver.trans_rdm1(mc.ci[self.casscf_state_idx[S2][I2]], mc.ci[self.casscf_state_idx[S1][I1]], mc.ncas, mc.nelecas)
+                tdm[:,idx2,idx1] = lib.einsum('xij,ji->x',z,t_dm1)
+                m_pol[:,idx2,idx1] = lib.einsum('xij,ji->x',z_m,t_dm1)
+        
+        for state in states:
+            tdm_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in tdm])[:, state])
+            mag_ene = myeigval - myeigval[state]
+            log.info('')
+            log.info('The oscillator strength and transition dipole moment for state %s', state)
+            tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)',
+                                          'fosc','D**2 (a.u.**2)','|Dx| (a.u.)','|Dy| (a.u.)','|Dz| (a.u.)'])
+            tb.align = 'c'
+            tb.hrules = 3
+            tb.vrules = 2
+            for name in tb.field_names[:3]:
+                tb.align[name] = 'r'
+            for i in range(self.nstates):
+                D2 = np.linalg.norm(tdm_so[:,i])**2
+                tb.add_row(['%s'%i,
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*1e7/nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                            '%.6f'%np.abs(2/3*mag_ene[i]*D2),
+                            '%.6f'%D2,
+                            '%.6f'%tdm_so[0,i],'%.6f'%tdm_so[1,i],'%.6f'%tdm_so[2,i]])
+            log.info('%s', tb)
+
+            if self.mol.spin%2 != 0:
+                log.info('')
+                log.info('The oscillator strength and transition dipole moment for state %s after summing the degenerate Kramers doublets', state)
+                tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)','fosc','D**2 (a.u.**2)'])
+                tb.align = 'c'
+                tb.hrules = 3
+                tb.vrules = 2
+                for name in tb.field_names[:3]:
+                    tb.align[name] = 'r'
+                for i in range(0, self.nstates, 2):
+                    D2 = np.linalg.norm(tdm_so[:,i])**2+np.linalg.norm(tdm_so[:,i+1])**2
+                    tb.add_row(['%s'%(i//2),
+                                '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                                '%.6f'%(mag_ene[i]*1e7/nist.HARTREE2WAVENUMBER),
+                                '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                                '%.6f'%np.abs(2/3*mag_ene[i]*D2),
+                                '%.6f'%D2])
+                log.info('%s', tb)
+
+            m_pol_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in m_pol])[:, state])
+            mag_ene = myeigval - myeigval[state]
+            log.info('')
+            log.info('The transition magnetic dipole moment for state %s', state)
+            tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)',
+                                          '|Mx| (a.u.)','|My| (a.u.)','|Mz| (a.u.)'])
+            tb.align = 'c'
+            tb.hrules = 3
+            tb.vrules = 2
+            for name in tb.field_names[:3]:
+                tb.align[name] = 'r'
+            for i in range(self.nstates):
+                D2 = np.linalg.norm(tdm_so[:,i])**2
+                tb.add_row(['%s'%i,
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*1e7/nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                            '%.6f'%m_pol_so[0,i],'%.6f'%m_pol_so[1,i],'%.6f'%m_pol_so[2,i]])
+            log.info('%s', tb)
