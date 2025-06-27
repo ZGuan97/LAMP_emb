@@ -142,7 +142,10 @@ def analysis(mc):
             nroot = nroots[i]
             for iroot in range(0, nroot):
                 print('analyze spin', spin, 'iroot', iroot)
-                mc_ci.analyze(ci=mc_ci.ci[iroot])
+                if nroot == 1:
+                    mc_ci.analyze(ci=mc_ci.ci)
+                else:
+                    mc_ci.analyze(ci=mc_ci.ci[iroot])
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
     return np.array(e_corrs)
