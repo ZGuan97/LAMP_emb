@@ -458,7 +458,7 @@ class SISO():
                 D2 = np.linalg.norm(tdm_so[:,i])**2
                 tb.add_row(['%s'%i,
                             '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
-                            '%.6f'%(mag_ene[i]*1e7/nist.HARTREE2WAVENUMBER),
+                            '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
                             '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
                             '%.6f'%np.abs(2/3*mag_ene[i]*D2),
                             '%.6f'%D2,
