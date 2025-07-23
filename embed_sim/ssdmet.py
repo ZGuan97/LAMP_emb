@@ -33,8 +33,8 @@ def mf_or_cas_make_rdm1s(mf_or_cas):
         dma, dmb = mf_or_cas.make_rdm1()
     elif isinstance(mf_or_cas, RHF):
         print('DMET from RHF')
-        dma = mf_or_cas.make_rdm1()
-        dmb = mf_or_cas.make_rdm1()
+        dma = mf_or_cas.make_rdm1()/2
+        dmb = mf_or_cas.make_rdm1()/2
     else:
         raise TypeError('starting point not supported',  mf_or_cas.__class__)
     return np.stack((dma, dmb), axis=0)
