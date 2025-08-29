@@ -178,8 +178,7 @@ def sacasscf_nevpt2_prism(mc, method, **kwargs):
                             interface.dip_mom_ao = lib.einsum('xij,ip,jq->xpq', mol.intor_symmetric('int1e_r', comp=3),
                                                               mydmet.es_orb, mydmet.es_orb)
                 else:
-                    interface.dip_mom_ao = lib.einsum('xij,ip,jq->xpq', mol.intor_symmetric('int1e_r', comp=3),
-                                                      mydmet.es_orb, mydmet.es_orb)
+                    interface.dip_mom_ao = mol.intor_symmetric('int1e_r', comp=3)
                 
                 nevpt2 = prism_nevpt2(interface)
                 if method.upper() in ['PC','FIC']:
