@@ -4,7 +4,6 @@ import itertools
 from sympy.physics.wigner import wigner_3j
 import os
 from collections.abc import Iterable
-import prettytable
 
 from pyscf import scf
 from pyscf.scf import jk
@@ -350,7 +349,7 @@ class SISO():
                 with_df = self.mc.with_df
         return DFSISO(self.title, self.mc, self.statelis, self.save_mag, self.save_Hmat, self.save_old_Hal, self.verbose, with_df)
     
-    def analyze(self, states=0, picture_change=True, gauge='length', order=0):
+    def analyze(self, states=0, picture_change=True, gauge='length', order=0, mag_dip=False):
         '''
         Calculate oscillator strength and transition dipole moment between SOC states
 
@@ -368,20 +367,36 @@ class SISO():
                 gauge = 'velocity: TODO
             order: integer
                 The order of multipole expansion when using velocity gauge, TODO
+            mag_dip: Boolean
+                Whether to calculate transition magnetic dipole moment
         '''
 
         def _charge_center(mol):
             charges = mol.atom_charges()
             coords  = mol.atom_coords()
             return np.einsum('z,zr->r', charges, coords)/charges.sum()
+        
+        log = logger.new_logger(self, 4)
+        log.info('')
+        log.info('******** %s ********', 'siso.analyze')
+
         myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
         mol = self.mol
         mc = self.mc
         with_x2c = getattr(self.mc._scf, 'with_x2c', None)
 
-        log = logger.new_logger(self, 4)
-        log.info('')
-        log.info('******** %s ********', 'siso.analyze')
+        try:
+            import prettytable
+        except ImportError:
+            import sys, subprocess, importlib
+            log.info('prettytable is not installed — attempting to install it now...')
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "prettytable"])
+            except subprocess.CalledProcessError:
+                raise RuntimeError('Failed to install prettytable automatically. Please run: pip install prettytable')
+            log.info('Successfully installed prettytable!')
+            prettytable = importlib.import_module("prettytable")
+
         if isinstance(states, int):
             if states >= self.nstates:
                 raise IndexError('states index out of range')
@@ -456,13 +471,22 @@ class SISO():
                 tb.align[name] = 'r'
             for i in range(self.nstates):
                 D2 = np.linalg.norm(tdm_so[:,i])**2
-                tb.add_row(['%s'%i,
-                            '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
-                            '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
-                            '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
-                            '%.6f'%np.abs(2/3*mag_ene[i]*D2),
-                            '%.6f'%D2,
-                            '%.6f'%tdm_so[0,i],'%.6f'%tdm_so[1,i],'%.6f'%tdm_so[2,i]])
+                if abs(mag_ene[i]*nist.HARTREE2WAVENUMBER) > 2e-6:
+                    tb.add_row(['%s'%i,
+                                '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                                '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
+                                '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                                '%.6f'%np.abs(2/3*mag_ene[i]*D2),
+                                '%.6f'%D2,
+                                '%.6f'%tdm_so[0,i],'%.6f'%tdm_so[1,i],'%.6f'%tdm_so[2,i]])
+                else:
+                    tb.add_row(['%s'%i,
+                                '%.6f'%(abs(mag_ene[i])*nist.HARTREE2WAVENUMBER),
+                                '%.6f'%(0),
+                                '%.6f'%(abs(mag_ene[i])*nist.HARTREE2EV),
+                                '%.6f'%np.abs(2/3*abs(mag_ene[i])*D2),
+                                '%.6f'%D2,
+                                '%.6f'%tdm_so[0,i],'%.6f'%tdm_so[1,i],'%.6f'%tdm_so[2,i]])
             log.info('%s', tb)
 
             if self.mol.spin%2 != 0:
@@ -476,30 +500,46 @@ class SISO():
                     tb.align[name] = 'r'
                 for i in range(0, self.nstates, 2):
                     D2 = np.linalg.norm(tdm_so[:,i])**2+np.linalg.norm(tdm_so[:,i+1])**2
-                    tb.add_row(['%s'%(i//2),
-                                '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
-                                '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
-                                '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
-                                '%.6f'%np.abs(2/3*mag_ene[i]*D2),
-                                '%.6f'%D2])
+                    if abs(mag_ene[i]*nist.HARTREE2WAVENUMBER) > 2e-6:
+                        tb.add_row(['%s'%(i//2),
+                                    '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                                    '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
+                                    '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                                    '%.6f'%np.abs(2/3*mag_ene[i]*D2),
+                                    '%.6f'%D2])
+                    else:
+                        tb.add_row(['%s'%(i//2),
+                                    '%.6f'%(abs(mag_ene[i])*nist.HARTREE2WAVENUMBER),
+                                    '%.6f'%(0),
+                                    '%.6f'%(abs(mag_ene[i])*nist.HARTREE2EV),
+                                    '%.6f'%np.abs(2/3*abs(mag_ene[i])*D2),
+                                    '%.6f'%D2])
                 log.info('%s', tb)
 
-            m_pol_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in m_pol])[:, state])
-            mag_ene = myeigval - myeigval[state]
-            log.info('')
-            log.info('The transition magnetic dipole moment for state %s', state)
-            tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)',
-                                          '|Mx| (a.u.)','|My| (a.u.)','|Mz| (a.u.)'])
-            tb.align = 'c'
-            tb.hrules = 3
-            tb.vrules = 2
-            for name in tb.field_names[:3]:
-                tb.align[name] = 'r'
-            for i in range(self.nstates):
-                D2 = np.linalg.norm(tdm_so[:,i])**2
-                tb.add_row(['%s'%i,
-                            '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
-                            '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
-                            '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
-                            '%.6f'%m_pol_so[0,i],'%.6f'%m_pol_so[1,i],'%.6f'%m_pol_so[2,i]])
-            log.info('%s', tb)
+            if mag_dip:
+                m_pol_so = np.abs(np.asarray([reduce(np.dot,(myeigvec.conj().T, x, myeigvec)) for x in m_pol])[:, state])
+                mag_ene = myeigval - myeigval[state]
+                log.info('')
+                log.info('The transition magnetic dipole moment for state %s', state)
+                tb = prettytable.PrettyTable(['','Energy (cm-1)','Energy (nm)','Energy (eV)',
+                                              '|Mx| (a.u.)','|My| (a.u.)','|Mz| (a.u.)'])
+                tb.align = 'c'
+                tb.hrules = 3
+                tb.vrules = 2
+                for name in tb.field_names[:3]:
+                    tb.align[name] = 'r'
+                for i in range(self.nstates):
+                    D2 = np.linalg.norm(tdm_so[:,i])**2
+                    if abs(mag_ene[i]*nist.HARTREE2WAVENUMBER) > 2e-6:
+                        tb.add_row(['%s'%i,
+                                    '%.6f'%(mag_ene[i]*nist.HARTREE2WAVENUMBER),
+                                    '%.6f'%(1e7/(mag_ene[i]*nist.HARTREE2WAVENUMBER)),
+                                    '%.6f'%(mag_ene[i]*nist.HARTREE2EV),
+                                    '%.6f'%m_pol_so[0,i],'%.6f'%m_pol_so[1,i],'%.6f'%m_pol_so[2,i]])
+                    else:
+                        tb.add_row(['%s'%i,
+                                    '%.6f'%(abs(mag_ene[i])*nist.HARTREE2WAVENUMBER),
+                                    '%.6f'%(0),
+                                    '%.6f'%(abs(mag_ene[i])*nist.HARTREE2EV),
+                                    '%.6f'%m_pol_so[0,i],'%.6f'%m_pol_so[1,i],'%.6f'%m_pol_so[2,i]])
+                log.info('%s', tb)

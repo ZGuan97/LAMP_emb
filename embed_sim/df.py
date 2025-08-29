@@ -16,6 +16,7 @@ from pyscf.data import nist
 from pyscf.lib import logger
 
 from embed_sim import ssdmet, aodmet, siso
+from embed_sim.BNO_bath import get_RMP2_bath, get_UMP2_bath, get_ROMP2_bath
 
 def make_es_cderi(title, es_orb, with_df):
     erifile = title+'_es_cderi.h5'
@@ -39,13 +40,14 @@ class DFSSDMET(ssdmet.SSDMET):
     """
     Density fitting single-shot DMET class
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO, with_df=None):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, with_df=None, es_natorb=True, bath_option=None, verbose=logger.INFO):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory # TODO
         self.verbose = verbose # TODO
         self.with_df = with_df
+        self.log = lib.logger.new_logger(self.mol, self.verbose)
 
         # inputs
         self.dm = None
@@ -56,6 +58,8 @@ class DFSSDMET(ssdmet.SSDMET):
             print('impurity index not assigned, use the first atom as impurity')
             self.imp_idx = self.mol.atom_symbol(0)
         self.threshold = threshold
+        self.es_natorb = es_natorb
+        self.bath_option = bath_option
 
         # NOT inputs
         self.fo_orb = None
@@ -96,16 +100,17 @@ class DFSSDMET(ssdmet.SSDMET):
                 self.es_occ = fh5['es_occ'][:]
                 self.es_int1e = fh5['es_int1e'][:]
                 self.es_cderi = self.title+'_es_cderi.h5'
+                self.es_dm = fh5['es_dm'][:]
 
                 self.nfo = np.shape(self.fo_orb)[1]
                 self.nfv = np.shape(self.fv_orb)[1]
                 self.nes = np.shape(self.es_orb)[1]
                 return True
             else:
-                print(f'density matrix check {dm_check}')
-                print(f'impurity index check {imp_idx_check}')
-                print(f'threshold check {threshold_check}')
-                print(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
+                self.log.info(f'density matrix check {dm_check}')
+                self.log.info(f'impurity index check {imp_idx_check}')
+                self.log.info(f'threshold check {threshold_check}')
+                self.log.info(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
                 return False
     
     def save_chk(self, chk_fname):
@@ -119,14 +124,18 @@ class DFSSDMET(ssdmet.SSDMET):
             fh5['es_orb'] = self.es_orb
             fh5['es_occ'] = self.es_occ
             fh5['es_int1e'] = self.es_int1e
+            fh5['es_dm'] = self.es_dm
         return 
 
     def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
         self.dump_flags()
-        self.dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
-        # self.dm = self.mf_or_cas.make_rdm1()
-        if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
-            self.dm = self.dm[0] + self.dm[1]
+        dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
+        if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
+            self.dm = dm[0] + dm[1]
+            open_shell = True
+        else:
+            self.dm = dm
+            open_shell = False
 
         loaded = self.load_chk(chk_fname_load)
         
@@ -143,61 +152,150 @@ class DFSSDMET(ssdmet.SSDMET):
             self.nfo = nfo
             self.nfv = nfv
             self.nes = nimp + nbath
-            print('number of impurity orbitals', nimp)
-            print('number of bath orbitals', nbath)
-            print('number of frozen occupied orbitals', nfo)
-            print('number of frozen virtual orbitals', nfv)
+            self.log.info(f'number of impurity orbitals = {nimp}')
+            self.log.info(f'number of bath orbitals = {nbath}')
+            self.log.info(f'number of embedded cluster orbitals = {nimp+nbath}')
+            self.log.info(f'number of frozen occupied orbitals = {nfo}')
+            self.log.info(f'number of frozen virtual orbitals = {nfv}')
+            self.log.info(f'number of frozen orbitals = {nfo+nfv}')
+            self.log.info(f'percentage of embedded cluster orbitals = {((nimp+nbath)/self.mol.nao)*100:.2f}%%')
+            self.log.info(f'percentage of frozen orbitals = {((nfo+nfv)/self.mol.nao)*100:.2f}%%')
 
             self.es_int1e = self.make_es_int1e()
             self.es_cderi = self.make_es_cderi()
 
-        chk_fname_save = self.title + '_dmet_chk.h5'
-        if save_chk:
-            self.save_chk(chk_fname_save)
+            self.es_dm = self.make_es_dm(open_shell, cloes[:, :nimp+nbath], cloao, dm)
+
+            if self.bath_option is not None:
+                self.log.info('')
+                if self.es_natorb:
+                    raise RuntimeError('es_natorb must be turned off when using extra bath_option')
+                lo2core = cloes[:, nimp+nbath: nimp+nbath+nfo]
+                lo2vir = cloes[:, nimp+nbath+nfo: nimp+nbath+nfo+nfv]
+                if isinstance(self.bath_option, dict):
+                    if len(self.bath_option.keys()) == 1:
+                        if 'MP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.info('ROMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['MP2'])
+                            else:
+                                self.log.info('RMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['MP2'])
+                        elif 'RMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.info('ROMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['RMP2'])
+                            else:
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['RMP2'])
+                        elif 'ROMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['ROMP2'])
+                            else:
+                                self.log.info('ROMP2 bath expansion is degraded to RMP2 for closed-shell systems')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['ROMP2'])
+                        elif 'UMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.warn('UMP2 bath expansion is less preferred than ROMP2, the results must be checked carefully!')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_UMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['UMP2'])
+                            else:
+                                self.log.info('UMP2 bath expansion is degraded to RMP2 for closed-shell systems')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['UMP2'])
+                        else:
+                            raise NotImplementedError('Currently only MP2, RMP2, ROMP2 and UMP2 are supported')
+                    else:
+                        raise NotImplementedError('Only one key should be in bath_option')
+                else:
+                    raise NotImplementedError('The bath_option should be a dictionary')
+                
+                lo2eo = np.hstack([cloes[:, :nimp+nbath], lo2MP2_bath])
+                self.es_orb = lib.dot(caolo, lo2eo)
+                self.fo_orb = lib.dot(caolo, lo2MP2_core)
+                self.fv_orb = lib.dot(caolo, lo2MP2_vir)
+
+                nbath += lo2MP2_bath.shape[-1]
+                nfo = self.fo_orb.shape[-1]
+                nfv = self.fv_orb.shape[-1]
+                self.nfo = nfo
+                self.nfv = nfv
+                self.nes = nimp + nbath
+                self.log.info(f'number of impurity orbitals = {nimp}')
+                self.log.info(f'number of bath orbitals = {nbath}')
+                self.log.info(f'number of embedded cluster orbitals = {nimp+nbath}')
+                self.log.info(f'number of frozen occupied orbitals = {nfo}')
+                self.log.info(f'number of frozen virtual orbitals = {nfv}')
+                self.log.info(f'number of frozen orbitals = {nfo+nfv}')
+                self.log.info(f'percentage of embedded cluster orbitals = {((nimp+nbath)/self.mol.nao)*100:.2f}%%')
+                self.log.info(f'percentage of frozen orbitals = {((nfo+nfv)/self.mol.nao)*100:.2f}%%')
+
+                self.es_int1e = self.make_es_int1e()
+                self.es_cderi = self.make_es_cderi()
+                self.es_dm = self.make_es_dm(open_shell, lo2eo, cloao, dm)
+            else:
+                pass
+
         self.es_mf = self.ROHF()
-        print('energy from frozen occupied orbitals', self.fo_ene())
+        self.fo_ene()
+        self.log.info('')
+        self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
+        self.log.info(f'deviation from DMET exact condition = {self.es_mf.e_tot+self.fo_ene-self.mf_or_cas.e_tot}')
+
+        if save_chk:
+            chk_fname_save = self.title + '_dmet_chk.h5'
+            self.save_chk(chk_fname_save)
         return self.es_mf
     
-    def ROHF(self, run_mf=False):
-       mol = gto.M()
-       mol.verbose = self.verbose
-       mol.incore_anyway = True
-       mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
-       mol.spin = self.mol.spin
+    def ROHF(self):
+        mol = gto.M()
+        mol.verbose = self.verbose
+        mol.incore_anyway = True
+        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.spin = self.mol.spin
 
-       es_mf = scf.rohf.ROHF(mol).x2c().density_fit()
-       es_mf.max_memory = self.max_mem
-       es_mf.mo_energy = np.zeros((self.nes))
+        if mol.spin != 0:
+            es_mf = scf.ROHF(mol).x2c().density_fit()
+        else:
+            es_mf = scf.RHF(mol).x2c().density_fit()
+        es_mf.max_memory = self.max_mem
+        es_mf.mo_energy = np.zeros((self.nes))
 
-       es_mf.get_hcore = lambda *args: self.es_int1e
-       es_mf.get_ovlp = lambda *args: np.eye(self.nes)
-       es_mf.with_df._cderi = self.es_cderi
+        es_ovlp = reduce(lib.dot, (self.es_orb.conj().T, self.mol.intor_symmetric('int1e_ovlp'), self.es_orb))
+        es_mf.get_hcore = lambda *args: self.es_int1e
+        es_mf.get_ovlp = lambda *args: es_ovlp
+        es_mf.with_df._cderi = self.es_cderi
 
-       es_dm = np.zeros((2, self.nes, self.nes))
-       es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
-       es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
-       self.es_dm = es_dm
-       es_mf.mo_coeff = np.eye(self.nes)
+        # assume we only perfrom ROHF-in-ROHF embedding
 
-       # assume we only perfrom ROHF-in-ROHF embedding
-
-       # assert np.einsum('ijj->', es_dm) == mol.nelectron
-       if run_mf:
-           es_mf.kernel(es_dm)
-           self.es_occ = es_mf.mo_occ
-       return es_mf
+        # assert lib.einsum('ijj->', es_dm) == mol.nelectron
+        es_mf.level_shift = self.mf_or_cas.level_shift
+        es_mf.conv_check = False
+        es_mf.kernel(self.es_dm)
+        self.es_occ = es_mf.mo_occ
+        return es_mf
     
 class DFAODMET(aodmet.AODMET):
     """
     Density fitting single-shot AO-DMET class
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-13, verbose=logger.INFO, with_df=None):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, with_df=None, es_natorb=True, bath_option=None, verbose=logger.INFO):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory # TODO
         self.verbose = verbose # TODO
         self.with_df = with_df
+        self.log = lib.logger.new_logger(self.mol, self.verbose)
 
         # inputs
         self.dm = None
@@ -208,6 +306,8 @@ class DFAODMET(aodmet.AODMET):
             print('impurity index not assigned, use the first atom as impurity')
             self.imp_idx = self.mol.atom_symbol(0)
         self.threshold = threshold
+        self.es_natorb = es_natorb
+        self.bath_option = bath_option
 
         # NOT inputs
         self.fo_orb = None
@@ -254,10 +354,10 @@ class DFAODMET(aodmet.AODMET):
                 self.nes = np.shape(self.es_orb)[1]
                 return True
             else:
-                print(f'density matrix check {dm_check}')
-                print(f'impurity index check {imp_idx_check}')
-                print(f'threshold check {threshold_check}')
-                print(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
+                self.log.info(f'density matrix check {dm_check}')
+                self.log.info(f'impurity index check {imp_idx_check}')
+                self.log.info(f'threshold check {threshold_check}')
+                self.log.info(f'build dmet subspace with imp idx {self.imp_idx} threshold {self.threshold}')
                 return False
     
     def save_chk(self, chk_fname):
@@ -275,17 +375,20 @@ class DFAODMET(aodmet.AODMET):
 
     def build(self, chk_fname_load='', save_chk=True):
         self.dump_flags()
-        self.dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
-        # self.dm = self.mf_or_cas.make_rdm1()
-        if self.dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
-            self.dm = self.dm[0] + self.dm[1]
+        dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
+        if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
+            self.dm = dm[0] + dm[1]
+            open_shell = True
+        else:
+            self.dm = dm
+            open_shell = False
 
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
             ldm, caolo, cloao, ovlp = self.lowdin_orth()
 
-            cloes, nimp, nbath, nfo, nfv, self.es_occ = aodmet.build_embeded_subspace(ldm, self.imp_idx, caolo, ovlp, thres=self.threshold)
+            cloes, nimp, nbath, nfo, nfv, self.es_occ = aodmet.build_embeded_subspace(ldm, self.imp_idx, caolo, ovlp, thres=self.threshold, es_natorb=self.es_natorb)
             caoes = caolo @ cloes
 
             self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
@@ -295,49 +398,137 @@ class DFAODMET(aodmet.AODMET):
             self.nfo = nfo
             self.nfv = nfv
             self.nes = nimp + nbath
-            print('number of impurity orbitals', nimp)
-            print('number of bath orbitals', nbath)
-            print('number of frozen occupied orbitals', nfo)
-            print('number of frozen virtual orbitals', nfv)
+            self.log.info(f'number of impurity orbitals = {nimp}')
+            self.log.info(f'number of bath orbitals = {nbath}')
+            self.log.info(f'number of embedded cluster orbitals = {nimp+nbath}')
+            self.log.info(f'number of frozen occupied orbitals = {nfo}')
+            self.log.info(f'number of frozen virtual orbitals = {nfv}')
+            self.log.info(f'number of frozen orbitals = {nfo+nfv}')
+            self.log.info(f'percentage of embedded cluster orbitals = {((nimp+nbath)/self.mol.nao)*100:.2f}%%')
+            self.log.info(f'percentage of frozen orbitals = {((nfo+nfv)/self.mol.nao)*100:.2f}%%')
 
             self.es_int1e = self.make_es_int1e()
             self.es_cderi = self.make_es_cderi()
 
-        chk_fname_save = self.title + '_dmet_chk.h5'
-        if save_chk:
-            self.save_chk(chk_fname_save)
+            self.es_dm = self.make_es_dm(open_shell, cloes[:, :nimp+nbath], cloao, dm)
+
+            if self.bath_option is not None:
+                self.log.info('')
+                if self.es_natorb:
+                    raise RuntimeError('es_natorb must be turned off when using extra bath_option')
+                lo2core = cloes[:, nimp+nbath: nimp+nbath+nfo]
+                lo2vir = cloes[:, nimp+nbath+nfo: nimp+nbath+nfo+nfv]
+                if isinstance(self.bath_option, dict):
+                    if len(self.bath_option.keys()) == 1:
+                        if 'MP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.info('ROMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['MP2'])
+                            else:
+                                self.log.info('RMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['MP2'])
+                        elif 'RMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.info('ROMP2 bath expansion in used by default')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['RMP2'])
+                            else:
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['RMP2'])
+                        elif 'ROMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                      lo2core, lo2vir, eta=self.bath_option['ROMP2'])
+                            else:
+                                self.log.info('ROMP2 bath expansion is degraded to RMP2 for closed-shell systems')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['ROMP2'])
+                        elif 'UMP2' in self.bath_option.keys():
+                            self.es_mf = self.ROHF()
+                            if open_shell:
+                                self.log.warn('UMP2 bath expansion is less preferred than ROMP2, the results must be checked carefully!')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_UMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['UMP2'])
+                            else:
+                                self.log.info('UMP2 bath expansion is degraded to RMP2 for closed-shell systems')
+                                lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
+                                                                                     lo2core, lo2vir, eta=self.bath_option['UMP2'])
+                        else:
+                            raise NotImplementedError('Currently only MP2, RMP2, ROMP2 and UMP2 are supported')
+                    else:
+                        raise NotImplementedError('Only one key should be in bath_option')
+                else:
+                    raise NotImplementedError('The bath_option should be a dictionary')
+                
+                lo2eo = np.hstack([cloes[:, :nimp+nbath], lo2MP2_bath])
+                self.es_orb = lib.dot(caolo, lo2eo)
+                self.fo_orb = lib.dot(caolo, lo2MP2_core)
+                self.fv_orb = lib.dot(caolo, lo2MP2_vir)
+
+                nbath += lo2MP2_bath.shape[-1]
+                nfo = self.fo_orb.shape[-1]
+                nfv = self.fv_orb.shape[-1]
+                self.nfo = nfo
+                self.nfv = nfv
+                self.nes = nimp + nbath
+                self.log.info(f'number of impurity orbitals = {nimp}')
+                self.log.info(f'number of bath orbitals = {nbath}')
+                self.log.info(f'number of embedded cluster orbitals = {nimp+nbath}')
+                self.log.info(f'number of frozen occupied orbitals = {nfo}')
+                self.log.info(f'number of frozen virtual orbitals = {nfv}')
+                self.log.info(f'number of frozen orbitals = {nfo+nfv}')
+                self.log.info(f'percentage of embedded cluster orbitals = {((nimp+nbath)/self.mol.nao)*100:.2f}%%')
+                self.log.info(f'percentage of frozen orbitals = {((nfo+nfv)/self.mol.nao)*100:.2f}%%')
+
+                self.es_int1e = self.make_es_int1e()
+                self.es_cderi = self.make_es_cderi()
+                self.es_dm = self.make_es_dm(open_shell, lo2eo, cloao, dm)
+            else:
+                pass
+
         self.es_mf = self.ROHF()
-        print('energy from frozen occupied orbitals', self.fo_ene())
+        self.fo_ene()
+        self.log.info('')
+        self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
+        self.log.info(f'deviation from DMET exact condition = {self.es_mf.e_tot+self.fo_ene-self.mf_or_cas.e_tot}')
+
+        if save_chk:
+            chk_fname_save = self.title + '_dmet_chk.h5'
+            self.save_chk(chk_fname_save)
         return self.es_mf
     
-    def ROHF(self, run_mf=False):
-       mol = gto.M()
-       mol.verbose = self.verbose
-       mol.incore_anyway = True
-       mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
-       mol.spin = self.mol.spin
+    def ROHF(self):
+        mol = gto.M()
+        mol.verbose = self.verbose
+        mol.incore_anyway = True
+        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.spin = self.mol.spin
 
-       es_mf = scf.rohf.ROHF(mol).x2c().density_fit()
-       es_mf.max_memory = self.max_mem
-       es_mf.mo_energy = np.zeros((self.nes))
+        if mol.spin != 0:
+            es_mf = scf.ROHF(mol).x2c().density_fit()
+        else:
+            es_mf = scf.RHF(mol).x2c().density_fit()
+        es_mf.max_memory = self.max_mem
+        es_mf.mo_energy = np.zeros((self.nes))
 
-       es_mf.get_hcore = lambda *args: self.es_int1e
-       es_mf.get_ovlp = lambda *args: np.eye(self.nes)
-       es_mf.with_df._cderi = self.es_cderi
+        es_ovlp = reduce(lib.dot, (self.es_orb.conj().T, self.mol.intor_symmetric('int1e_ovlp'), self.es_orb))
+        es_mf.get_hcore = lambda *args: self.es_int1e
+        es_mf.get_ovlp = lambda *args: es_ovlp
+        es_mf.with_df._cderi = self.es_cderi
 
-       es_dm = np.zeros((2, self.nes, self.nes))
-       es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
-       es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
-       self.es_dm = es_dm
-       es_mf.mo_coeff = np.eye(self.nes)
+        # assume we only perfrom ROHF-in-ROHF embedding
 
-       # assume we only perfrom ROHF-in-ROHF embedding
-
-       # assert np.einsum('ijj->', es_dm) == mol.nelectron
-       if run_mf:
-           es_mf.kernel(es_dm)
-           self.es_occ = es_mf.mo_occ
-       return es_mf
+        # assert lib.einsum('ijj->', es_dm) == mol.nelectron
+        es_mf.level_shift = self.mf_or_cas.level_shift
+        es_mf.conv_check = False
+        es_mf.kernel(self.es_dm)
+        self.es_occ = es_mf.mo_occ
+        return es_mf
     
 class DFNEVPT(NEVPT):
     _keys = {

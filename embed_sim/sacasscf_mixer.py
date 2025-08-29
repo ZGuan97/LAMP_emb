@@ -1,4 +1,4 @@
-from pyscf import mcscf, fci, mrpt
+from pyscf import mcscf, fci, mrpt, lib
 from pyscf.lib import logger
 
 import numpy as np
@@ -51,8 +51,13 @@ def read_statelis(mc):
     statelis[spins] = nroots
     return statelis
 
-def sacasscf_nevpt2(mc):
-    return sacasscf_nevpt2_casci_ver(mc)
+def sacasscf_nevpt2(mc, method='SC', **kwargs):
+    if method.upper() == 'SC':
+        return sacasscf_nevpt2_casci_ver(mc)
+    elif method.upper() in ['PC','FIC','QD']:
+        return sacasscf_nevpt2_prism(mc, method, **kwargs)
+    else:
+        raise NotImplementedError('Currently only SC-, PC-(FIC-) and QD- are supported')
 
 from pyscf.fci.addons import _unpack_nelec
 def sacasscf_nevpt2_undo_ver(mc):
@@ -122,6 +127,74 @@ def sacasscf_nevpt2_casci_ver(mc):
     else:
         raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
     return np.array(e_corrs)
+
+def sacasscf_nevpt2_prism(mc, method, **kwargs):
+    log = logger.new_logger(mc)
+    try:
+        from prism.interface import PYSCF as pyscf2prism
+        from prism.nevpt import NEVPT as prism_nevpt2
+    except ImportError:
+        log.warn('Prism is not installed and SC-NEVPT2 is applied! Please see https://github.com/sokolov-group/prism')
+        return sacasscf_nevpt2_casci_ver(mc)
+    else:
+        from pyscf.mcscf.addons import StateAverageFCISolver
+        from pyscf.mcscf.df import _DFCAS
+        if isinstance(mc.fcisolver, StateAverageFCISolver):
+            spins = []
+            nroots = []
+            for solver in mc.fcisolver.fcisolvers:
+                spins.append(solver.spin)
+                nroots.append(solver.nroots)
+            e_corrs = []
+            for i, spin in enumerate(spins):
+                log.info('CASCI for spin %s', spin)
+                mc_ci = mcscf.CASCI(mc._scf, mc.ncas, mc.nelecas)
+                mc_ci.nelecas = _unpack_nelec(mc.nelecas, spin)
+                mc_ci.fcisolver.spin = spin
+                mc_ci.fix_spin_(shift=0.5, ss=(spin/2)*(spin/2+1))
+                mc_ci.fcisolver.nroots = nroots[i] # this is important for convergence of CASCI
+                mc_ci.kernel(mc.mo_coeff)
+
+                interface = pyscf2prism(mc._scf, mc_ci, opt_einsum = True)
+                if isinstance(mc, _DFCAS):
+                    interface = pyscf2prism(mc._scf, mc_ci, opt_einsum = True).density_fit(with_df=mc._scf.with_df)
+                    interface.get_naux = mc._scf.with_df.get_naoaux
+                else:
+                    interface = pyscf2prism(mc._scf, mc_ci, opt_einsum = True)
+                def _charge_center(mol):
+                    charges = mol.atom_charges()
+                    coords  = mol.atom_coords()
+                    return lib.einsum('z,zr->r', charges, coords)/charges.sum()
+                mol = mc._scf.mol
+                if mol.nao == 0:
+                    try:
+                        mydmet = kwargs['dmet']
+                    except KeyError:
+                        log.warn('No dmet object input, the transition dipole moments will be set to zeros')
+                        interface.dip_mom_ao = np.zeros((3,mc_ci.mo_coeff.shape[-1],mc_ci.mo_coeff.shape[-1]))
+                    else:
+                        mol = mydmet.mol
+                        with mol.with_common_orig(_charge_center(mol)):
+                            interface.dip_mom_ao = lib.einsum('xij,ip,jq->xpq', mol.intor_symmetric('int1e_r', comp=3),
+                                                              mydmet.es_orb, mydmet.es_orb)
+                else:
+                    interface.dip_mom_ao = lib.einsum('xij,ip,jq->xpq', mol.intor_symmetric('int1e_r', comp=3),
+                                                      mydmet.es_orb, mydmet.es_orb)
+                
+                nevpt2 = prism_nevpt2(interface)
+                if method.upper() in ['PC','FIC']:
+                    nevpt2.method = "nevpt2"
+                else:
+                    nevpt2.method = 'qd-nevpt2'
+                if 'expert_options' in kwargs.keys():
+                    expert_options = kwargs['expert_options']
+                    for option, value in expert_options.items():
+                        setattr(nevpt2, option, value)
+                e_tot, e_corr, osc = nevpt2.kernel()
+                e_corrs += e_corr
+        else:
+            raise TypeError(mc.fcisolver, 'Not StateAverageFCISolver')
+        return np.array(e_corrs)
 
 def analysis(mc):
     from pyscf.mcscf.addons import StateAverageFCISolver
