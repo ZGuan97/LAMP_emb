@@ -373,7 +373,8 @@ class DFAODMET(aodmet.AODMET):
             fh5['es_int1e'] = self.es_int1e
         return 
 
-    def build(self, chk_fname_load='', save_chk=True):
+    def build(self, conv_tol=1e-9, chk_fname_load='', save_chk=True):
+        conv_tol = conv_tol
         self.dump_flags()
         dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -421,7 +422,7 @@ class DFAODMET(aodmet.AODMET):
                 if isinstance(self.bath_option, dict):
                     if len(self.bath_option.keys()) == 1:
                         if 'MP2' in self.bath_option.keys():
-                            self.es_mf = self.ROHF()
+                            self.es_mf = self.ROHF(conv_tol)
                             if open_shell:
                                 self.log.info('ROMP2 bath expansion in used by default')
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
@@ -431,7 +432,7 @@ class DFAODMET(aodmet.AODMET):
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
                                                                                      lo2core, lo2vir, eta=self.bath_option['MP2'])
                         elif 'RMP2' in self.bath_option.keys():
-                            self.es_mf = self.ROHF()
+                            self.es_mf = self.ROHF(conv_tol)
                             if open_shell:
                                 self.log.info('ROMP2 bath expansion in used by default')
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
@@ -440,7 +441,7 @@ class DFAODMET(aodmet.AODMET):
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
                                                                                      lo2core, lo2vir, eta=self.bath_option['RMP2'])
                         elif 'ROMP2' in self.bath_option.keys():
-                            self.es_mf = self.ROHF()
+                            self.es_mf = self.ROHF(conv_tol)
                             if open_shell:
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
                                                                                       lo2core, lo2vir, eta=self.bath_option['ROMP2'])
@@ -449,7 +450,7 @@ class DFAODMET(aodmet.AODMET):
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
                                                                                      lo2core, lo2vir, eta=self.bath_option['ROMP2'])
                         elif 'UMP2' in self.bath_option.keys():
-                            self.es_mf = self.ROHF()
+                            self.es_mf = self.ROHF(conv_tol)
                             if open_shell:
                                 self.log.warn('UMP2 bath expansion is less preferred than ROMP2, the results must be checked carefully!')
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_UMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
@@ -491,7 +492,7 @@ class DFAODMET(aodmet.AODMET):
             else:
                 pass
 
-        self.es_mf = self.ROHF()
+        self.es_mf = self.ROHF(conv_tol)
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -502,7 +503,7 @@ class DFAODMET(aodmet.AODMET):
             self.save_chk(chk_fname_save)
         return self.es_mf
     
-    def ROHF(self):
+    def ROHF(self,conv_tol):
         mol = gto.M()
         mol.verbose = self.verbose
         mol.incore_anyway = True
@@ -526,6 +527,7 @@ class DFAODMET(aodmet.AODMET):
         # assert lib.einsum('ijj->', es_dm) == mol.nelectron
         es_mf.level_shift = self.mf_or_cas.level_shift
         es_mf.conv_check = False
+        es_mf.conv_tol = conv_tol
         es_mf.kernel(self.es_dm)
         self.es_occ = es_mf.mo_occ
         return es_mf
