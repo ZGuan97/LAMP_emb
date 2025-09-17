@@ -373,7 +373,8 @@ class DFAODMET(aodmet.AODMET):
             fh5['es_int1e'] = self.es_int1e
         return 
 
-    def build(self, chk_fname_load='', save_chk=True):
+    def build(self, conv_tol=1e-9, chk_fname_load='', save_chk=True):
+        conv_tol = conv_tol
         self.dump_flags()
         dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -491,7 +492,7 @@ class DFAODMET(aodmet.AODMET):
             else:
                 pass
 
-        self.es_mf = self.ROHF()
+        self.es_mf = self.ROHF(conv_tol)
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -502,7 +503,7 @@ class DFAODMET(aodmet.AODMET):
             self.save_chk(chk_fname_save)
         return self.es_mf
     
-    def ROHF(self):
+    def ROHF(self,conv_tol):
         mol = gto.M()
         mol.verbose = self.verbose
         mol.incore_anyway = True
@@ -526,6 +527,7 @@ class DFAODMET(aodmet.AODMET):
         # assert lib.einsum('ijj->', es_dm) == mol.nelectron
         es_mf.level_shift = self.mf_or_cas.level_shift
         es_mf.conv_check = False
+        es_mf.conv_tol = conv_tol
         es_mf.kernel(self.es_dm)
         self.es_occ = es_mf.mo_occ
         return es_mf
