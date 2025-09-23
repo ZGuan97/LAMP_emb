@@ -7,9 +7,6 @@ from embed_sim import aodmet, myavas, sacasscf_mixer, siso, rdiis
 PySCF only supports strongly contracted NEVPT2 (SC-NEVPT2).
 Prism (https://github.com/sokolov-group/prism) supports both partially contracted NEVPT2 (PC-NEVPT2)
 (also known as full internal contraction NEVPT2 (FIC-NEVPT2)) and quasidegenerate NEVPT2 (QD-NEVPT2).
-Besides, both original SC-NEVPT2 in PySCF suffer from memory issues, because the transformed ERIs are stored in memory.
-For SC-NEVPT2, with 1TB memory, the maximum of the number of basis set functions is approximately 1000.
-Prism solves this problem elegantly with density fitting, which enable NEVPT2 calculations for much larger molecules.
 '''
 
 title = 'CoSH4'
@@ -110,4 +107,5 @@ The amfi means one-center approximated SOMF Hamiltonian (SOMF(1X)), which strict
 is not AMFI. The notation here is just for the consistence with Block2.
 '''
 mysiso = siso.SISO(title, total_cas, amfi=True).density_fit()
+
 mysiso.kernel()
