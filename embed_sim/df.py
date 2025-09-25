@@ -1,5 +1,6 @@
 import numpy as np
 import h5py
+import tempfile
 import os
 import itertools 
 from functools import reduce
@@ -280,7 +281,14 @@ class DFSSDMET(ssdmet.SSDMET):
         # assert lib.einsum('ijj->', es_dm) == mol.nelectron
         es_mf.level_shift = self.mf_or_cas.level_shift
         es_mf.conv_check = False
-        es_mf.kernel(self.es_dm)
+        
+        es_fock = es_mf.get_fock(dm=self.es_dm)
+        mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+        mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+        es_mf.mo_energy = mo_energy
+        es_mf.mo_coeff = mo_coeff
+        es_mf.mo_occ = mo_occ
+        es_mf.e_tot = es_mf.energy_tot()
         self.es_occ = es_mf.mo_occ
         return es_mf
     
@@ -526,7 +534,14 @@ class DFAODMET(aodmet.AODMET):
         # assert lib.einsum('ijj->', es_dm) == mol.nelectron
         es_mf.level_shift = self.mf_or_cas.level_shift
         es_mf.conv_check = False
-        es_mf.kernel(self.es_dm)
+
+        es_fock = es_mf.get_fock(dm=self.es_dm)
+        mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+        mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+        es_mf.mo_energy = mo_energy
+        es_mf.mo_coeff = mo_coeff
+        es_mf.mo_occ = mo_occ
+        es_mf.e_tot = es_mf.energy_tot()
         self.es_occ = es_mf.mo_occ
         return es_mf
     
@@ -680,19 +695,27 @@ def _ERIS(mc, mo):
     nav = nmo - ncore
     nvir = nmo - nocc
     
-    ppaa = np.zeros((nmo,nmo,ncas,ncas),dtype=np.float64)
-    papa = np.zeros((nmo,ncas,nmo,ncas),dtype=np.float64)
-    pacv = np.zeros((nmo,ncas,ncore,nvir),dtype=np.float64)
-    cvcv = np.zeros((ncore*nvir,ncore*nvir),dtype=np.float64)
+    temp_file = tempfile.NamedTemporaryFile(dir=lib.param.TMPDIR, delete=True)
+    filename = temp_file.name
+    erifile = h5py.File(filename, mode='r+')
+    ppaa = erifile.create_dataset('ppaa', (nmo,nmo,ncas,ncas), 'f8')
+    papa = erifile.create_dataset('papa', (nmo,ncas,nmo,ncas), 'f8')
+    pacv = erifile.create_dataset('pacv', (nmo,ncas,ncore,nvir), 'f8')
+    cvcv = erifile.create_dataset('cvcv', (ncore*nvir,ncore*nvir), 'f8')
     
     ijmosym, nij_pair, moij, ijslice = _conc_mos(mo, mo, True)
     for eri1 in mc._scf.with_df.loop():
         Lij = _ao2mo.nr_e2(eri1, moij, ijslice, aosym='s2', mosym=ijmosym)
         Lij = lib.unpack_tril(Lij)
-        ppaa += lib.einsum('Pij,Pkl->ijkl', Lij, Lij[:,ncore:nocc,ncore:nocc])
-        papa += lib.einsum('Pij,Pkl->ijkl', Lij[:,:,ncore:nocc], Lij[:,:,ncore:nocc])
-        pacv += lib.einsum('Pij,Pkl->ijkl', Lij[:,:,ncore:nocc], Lij[:,:ncore,nocc:])
-        cvcv += lib.dot(Lij[:,:ncore,nocc:].reshape(-1,ncore*nvir).T,Lij[:,:ncore,nocc:].reshape(-1,ncore*nvir))
+        ppaa[:] += lib.einsum('Pij,Pkl->ijkl', Lij, Lij[:,ncore:nocc,ncore:nocc])
+        papa[:] += lib.einsum('Pij,Pkl->ijkl', Lij[:,:,ncore:nocc], Lij[:,:,ncore:nocc])
+        pacv[:] += lib.einsum('Pij,Pkl->ijkl', Lij[:,:,ncore:nocc], Lij[:,:ncore,nocc:])
+        max_memory = int(mc.max_memory - lib.current_memory()[0])
+        nvcv = nvir*ncore*nvir
+        blksize = max(1, int(max_memory*.35e6/8/nvcv//10))
+        for cstart, cend in lib.prange(0, ncore, blksize):
+            nc = cend - cstart
+            cvcv[cstart*nvir:cend*nvir] += lib.dot(Lij[:,cstart:cend,nocc:].reshape(-1,nc*nvir).T,Lij[:,:ncore,nocc:].reshape(-1,ncore*nvir))
 
     dmcore = lib.dot(mo[:,:ncore], mo[:,:ncore].T)
     vj, vk = mc._scf.get_jk(mc.mol, dmcore)
