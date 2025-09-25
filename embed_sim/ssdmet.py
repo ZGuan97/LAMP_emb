@@ -486,15 +486,23 @@ class SSDMET(lib.StreamObject):
         es_mf.get_hcore = lambda *args: self.es_int1e
         es_mf.get_ovlp = lambda *args: es_ovlp
         es_mf._eri = self.es_int2e
-        es_mf.mo_coeff = np.eye(self.nes)
-
-        # assume we only perfrom ROHF-in-ROHF embedding
-
-        # assert lib.einsum('ijj->', es_dm) == mol.nelectron
         es_mf.level_shift = self.mf_or_cas.level_shift
         es_mf.conv_check = False
-        es_mf.kernel(self.es_dm)
-        self.es_occ = es_mf.mo_occ
+
+        if self.es_natorb:
+            es_mf.mo_coeff = np.eye(self.nes)
+            es_mf.mo_energy = np.zeros((self.nes))
+            es_mf.mo_occ = round_off_occ(self.es_occ)
+            es_mf.e_tot = es_mf.energy_tot(dm=self.es_dm)
+        else:
+            es_fock = es_mf.get_fock(dm=self.es_dm)
+            mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+            mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+            es_mf.mo_energy = mo_energy
+            es_mf.mo_coeff = mo_coeff
+            es_mf.mo_occ = mo_occ
+            es_mf.e_tot = es_mf.energy_tot()
+            self.es_occ = es_mf.mo_occ
         return es_mf
     
     def avas(self, aolabels, *args, **kwargs):
