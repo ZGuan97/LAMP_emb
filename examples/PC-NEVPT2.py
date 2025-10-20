@@ -106,6 +106,7 @@ np.savetxt(mydmet.title+'_opt.txt',(es_cas.fcisolver.e_states-np.min(es_cas.fcis
 The amfi means one-center approximated SOMF Hamiltonian (SOMF(1X)), which strictly speaking
 is not AMFI. The notation here is just for the consistence with Block2.
 '''
-mysiso = siso.SISO(title, total_cas, amfi=True).density_fit()
+mysiso = siso.SISO(title, total_cas, amfi=True)
 
 mysiso.kernel()
+
