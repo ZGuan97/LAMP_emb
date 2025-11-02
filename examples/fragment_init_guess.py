@@ -7,7 +7,7 @@ from functools import reduce
 from scipy.linalg import block_diag
 
 def generate_fragment_guess(mol, fragments_info):
-    print("--- Initial guess by frag ---")
+    lib.logger.info(mol, "--- Initial guess by frag ---")
 
     all_frag_indices = []
     all_frag_atom_specs = []
@@ -28,7 +28,7 @@ def generate_fragment_guess(mol, fragments_info):
         if not current_frag_indices:
             raise ValueError(f"Frag {i} (symbol: {frag_symbols}) couldn't find any atom that can be matched with")
 
-        print(f"Frag {i} (symbol: {frag_symbols}) Atom index: {sorted(list(current_frag_indices))}")
+        lib.logger.info(mol, 'Frag %d (symbol: %s) Atom index: %s', i, frag_symbols, sorted(current_frag_indices))
 
         sorted_indices = sorted(list(current_frag_indices))
         all_frag_indices.append(sorted_indices)
@@ -36,7 +36,7 @@ def generate_fragment_guess(mol, fragments_info):
 
     if unassigned_atom_indices:
         raise ValueError(f"Error: These atoms are not assigned to any frag: {unassigned_atom_indices}")
-    print("\n All atoms have been assigned to certain frag")
+    lib.logger.info(mol, '\nAll atoms have been assigned to certain frag')
 
     mf_fragments = []
     total_spin_check = 0
@@ -44,7 +44,7 @@ def generate_fragment_guess(mol, fragments_info):
 
     mf_dm = []
     for i, (frag_info, frag_indices) in enumerate(zip(fragments_info, all_frag_indices)):
-        print(f"\n--- Processing frag {i} ---")
+        lib.logger.info(mol, '\n--- Processing frag %d ---', i)
         frag_spin = frag_info['spin']
         frag_charge = frag_info['charge']
         total_spin_check += frag_spin
@@ -66,22 +66,22 @@ def generate_fragment_guess(mol, fragments_info):
         frag_mol.charge = frag_charge
         frag_mol.build()
 
-        print(f"Carrying out ROHF calculations for frag {i} ...")
+        lib.logger.info(mol, '\n Carrying out ROHF calculations for frag %d ...", i)
         mf = scf.rohf.ROHF(frag_mol).x2c().density_fit()
         mf.conv_tol = 0.1
         mf.level_shift = 1
         mf.conv_check = False
         mf.run(init_guess='minao', verbose=4)
-        print(f"Calculation for frag {i} completed. E = {mf.e_tot:.8f}")
+        lib.logger.info(mol, 'Calculation for frag %d completed. E = %.8f', i, mf.e_tot)
         dma,dmb = mf.make_rdm1()
         dm = dma + dmb
         mf_dm.append(dm)
         mf_fragments.append(mf)
 
     if total_charge_check != mol.charge or total_spin_check != mol.spin:
-        print(f"Warning: Sum of frag charge/frag spin ≠ system charge/spin!")
-        print(f"Sum of frag charge: {total_charge_check}, system charge: {mol.charge}")
-        print(f"Sum of frag spin: {total_spin_check}, system spin: {mol.spin}")
+        lib.logger.warn(mol, 'Warning: Sum of frag charge/frag spin ≠ system charge/spin!')
+        lib.logger.info(mol, 'Sum of frag charge: %s, system charge: %s', total_charge_check, mol.charge)
+        lib.logger.info(mol, 'Sum of frag spin: %s, system spin: %s', total_spin_check, mol.spin)
     combined_atom_spec = []
     for spec in all_frag_atom_specs:
         for atom in spec:
@@ -96,14 +96,14 @@ def generate_fragment_guess(mol, fragments_info):
     combined_mol.charge = mol.charge
     combined_mol.nucmod = mol.nucmod
     combined_mol.build()
-    print("\n New molecule has been generated in the order of fragment")
+    lib.logger.info(mol, '\nNew molecule has been generated in the order of fragments')
     list_of_mo_coeffs = [mf.mo_coeff for mf in mf_fragments]
     list_of_mo_occs = [mf.mo_occ for mf in mf_fragments]
     dm_guess = block_diag(*mf_dm)
     mo_coeff_guess = block_diag(*list_of_mo_coeffs)
     mo_occ_guess = numpy.concatenate(list_of_mo_occs)
 
-    print("\n Density matrix concatenated successfully")
+    lib.logger.info(mol, '\nDensity matrix concatenated successfully')
 
     return combined_mol, dm_guess, mo_coeff_guess, mo_occ_guess
 
@@ -121,20 +121,20 @@ if __name__ == '__main__':
                     atom_coords.append([symbol, coords])
                 return atom_coords
         except (IOError, IndexError, ValueError) as e:
-            print(f"Errors occur when reading '{filename}' : {e}")
-            print("Please make sure that the file exists and it is in correct format (First row be # of atoms, second row be comment).")
+            lib.logger.info(mol, "Errors occur when reading '%s': %s", filename, e)
+            lib.logger.info(mol, "Please make sure that the file exists and it is in correct format (first row: number of atoms; second row: comment).")
             return None
     xyz_filename = 'DyCpBz.xyz' 
     atom_list = read_xyz_robust(xyz_filename)
     mol = gto.M(atom=atom_list,
             basis={
-                'Dy2':gto.basis.parse(bse.get_basis('ANO-R2',elements='Dy',fmt='nwchem')),
-                'Dy1':gto.basis.parse(bse.get_basis('ANO-R2',elements='Dy',fmt='nwchem')),
-                'C1':gto.basis.parse(bse.get_basis('ANO-R1',elements='C',fmt='nwchem')),
-                'C0':gto.basis.parse(bse.get_basis('ANO-R1',elements='C',fmt='nwchem')),
-                'C':gto.basis.parse(bse.get_basis('ANO-R0',elements='C',fmt='nwchem')),
-                'H':gto.basis.parse(bse.get_basis('ANO-R0',elements='H',fmt='nwchem')),
-                'H0':gto.basis.parse(bse.get_basis('ANO-R1',elements='H',fmt='nwchem'))
+                'Dy2':'ANO-R2',
+                'Dy1':'ANO-R2',
+                'C1':'ANO-R1',
+                'C0':'ANO-R1',
+                'C':'ANO-R0',
+                'H':'ANO-R0',
+                'H0':'ANO-R1'
                 },nucmod='G',
             symmetry=0,spin=10,charge=0,verbose=4)
     title = 'DyCpBz_frag'
@@ -221,13 +221,13 @@ if __name__ == '__main__':
   
     # It is recommended to first converge with a small basis set, then perform calculation with a larger one.
     new_mol.basis = {
-                'Dy2':gto.basis.parse(bse.get_basis('ANO-R2',elements='Dy',fmt='nwchem')),
-                'Dy1':gto.basis.parse(bse.get_basis('ANO-R2',elements='Dy',fmt='nwchem')),
-                'C1':gto.basis.parse(bse.get_basis('ANO-R2',elements='C',fmt='nwchem')),
-                'C0':gto.basis.parse(bse.get_basis('ANO-R2',elements='C',fmt='nwchem')),
-                'C':gto.basis.parse(bse.get_basis('ANO-R1',elements='C',fmt='nwchem')),
-                'H':gto.basis.parse(bse.get_basis('ANO-R1',elements='H',fmt='nwchem')),
-                'H0':gto.basis.parse(bse.get_basis('ANO-R2',elements='H',fmt='nwchem'))
+                'Dy2':'ANO-R2',
+                'Dy1':'ANO-R2',
+                'C1':'ANO-R2',
+                'C0':'ANO-R2',
+                'C':'ANO-R1',
+                'H':'ANO-R1',
+                'H0':'ANO-R2'
                 }
     new_mol.build()
     mf = scf.rohf.ROHF(new_mol).x2c().density_fit()
