@@ -28,7 +28,7 @@ def generate_fragment_guess(mol, fragments_info):
         if not current_frag_indices:
             raise ValueError(f"Frag {i} (symbol: {frag_symbols}) couldn't find any atom that can be matched with")
 
-        lib.logger.info(mol, 'Frag %d (symbol: %s) Atom index: %s', i, frag_symbols, sorted(current_frag_indices))
+        lib.logger.info(mol, 'Frag %d (symbol: %s) Atom index: %s', i, frag_symbols, sorted(list(current_frag_indices)))
 
         sorted_indices = sorted(list(current_frag_indices))
         all_frag_indices.append(sorted_indices)
