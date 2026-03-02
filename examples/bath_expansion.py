@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from pyscf import gto, scf, df
-from embed_sim import aodmet, sacasscf_mixer, siso, rdiis
+from embed_sim import ssdmet, sacasscf_mixer, siso, rdiis
 
 title = 'CoSH4'
 
@@ -53,8 +53,25 @@ In this case, both MP2 and RMP2 will be automatically switched to ROMP2. UMP2 ma
 results to ROMP2 when the spin-contamination is small, but you should note that applying UMP2 to ROHF
 is not theoretically rigorous.
 '''
-mydmet = aodmet.AODMET(mf, title=title, imp_idx='Co.*', es_natorb=False, bath_option={'MP2':1e-3}).density_fit()
+'''
+The current bath expansion is implemented only for LO-DMET. ath expansion based on AO-DMET has NOT 
+been implemented yet; returning results directly would produce incorrect results.
+'''
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*', es_natorb=False, readmp2 = True, bath_option={'ROMP2':1e-3}).density_fit()
 mydmet.build(save_chk=False)
+'''
+For bath_option = {'ROMP2': ...}, the ROMP2 matrix required for bath expansion
+can be loaded if the file storing it already exists. This can be done by
+setting readmp2 = True.
+'''
+'''
+The parameter eta can also be set to a value > 1. In this case, it represents the number of 
+new bath orbitals to be added through the bath expansion procedure.
+'''
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*', es_natorb=False, readmp2 = True, bath_option={'ROMP2':20}).density_fit()
+mydmet.build(save_chk=False)
+
+
 
 ncas, nelec, es_mo = mydmet.avas('Co 3d', minao=mol._basis['Co'], threshold=0.5, openshell_option=2)
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
