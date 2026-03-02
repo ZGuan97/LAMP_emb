@@ -190,11 +190,12 @@ class SSDMET(lib.StreamObject):
     """
     single-shot DMET with impurity-environment partition
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, bath_option=None, verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, readmp2 = False, bath_option=None, verbose=logger.INFO):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory # TODO
+        self.readmp2 = readmp2
         self.verbose = verbose # TODO
         self.log = lib.logger.new_logger(self.mol, self.verbose)
 
@@ -387,7 +388,7 @@ class SSDMET(lib.StreamObject):
                             self.es_mf = self.ROHF()
                             if open_shell:
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_ROMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
-                                                                                      lo2core, lo2vir, eta=self.bath_option['ROMP2'])
+                                                                                      lo2core, lo2vir, readmp2 = self.readmp2, eta=self.bath_option['ROMP2'])
                             else:
                                 self.log.info('ROMP2 bath expansion is degraded to RMP2 for closed-shell systems')
                                 lo2MP2_bath, lo2MP2_core, lo2MP2_vir = get_RMP2_bath(self.mf_or_cas, self.es_mf, self.es_orb, self.fo_orb, self.fv_orb,
