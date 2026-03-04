@@ -2,7 +2,7 @@
 
 from email.policy import default
 #from turtle import home
-from embed_sim.AIMP3_zt_new import AIMPEnvLoader, AIMP_RHF, AIMP_RKS, AIMP_ROHF, AIMP_ROKS, AIMP_UKS, AIMP_GKS
+from embed_sim.AIMP3_Bare_Ion import AIMPEnvLoader, AIMP_RHF, AIMP_RKS, AIMP_ROHF, AIMP_ROKS, AIMP_UKS, AIMP_GKS
 from embed_sim.pckit2 import OrganicPCLoader, PointChargeParams
 from embed_sim.constraint_optimizer import ConstraintOptimizer
 from embed_sim.EnvGenerator import XYZParser
