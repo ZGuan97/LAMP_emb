@@ -1,0 +1,39 @@
+type: energy
+cluster:
+  dir: cluster.xyz
+  basis: {'Ce':"gto.basis.parse(bse.get_basis('ANO-R2',elements='Ce',fmt='nwchem'))",
+          'O1':'ccpvdz',
+          'O2':'ccpvdz',
+          'O3':'ccpvdz',
+          'O4':'ccpvdz',
+          'O5':'ccpvdz',
+          'O6':'ccpvdz',
+          'O7':'ccpvdz',
+          'O8':'ccpvdz',
+          'O':'ccpvdz',
+          'Al':'ccpvdz',
+          'Y':"gto.basis.parse(bse.get_basis('jorge-DZP-DKH',elements='Y',fmt='nwchem'))"
+          }
+  charge: -19
+  spin: 1
+  scf:
+    calc: ROHF
+aimp:
+  dir: aimp.xyz
+  charge:
+    Y: 3
+    Al: 3
+    O: -2
+  basis:
+    Y: "gto.basis.parse(bse.get_basis('jorge-DZP-DKH',elements='Y',fmt='nwchem'))"
+    Al: ccpvdz
+    O: ccpvdz
+  scf:
+    calc: hf
+
+pointcharge:
+  rawxyzdir: rawChgs.xyz # generated from the last step
+  rawchgdir: rawCharges.dat  # generated from the last step
+  surfxyzdir: surfChgs.xyz
+  surfchgdir: surfaceCharges.dat
+chkfile: Ce.chk # output the checkpoint file
