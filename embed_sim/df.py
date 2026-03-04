@@ -126,7 +126,7 @@ class DFSSDMET(ssdmet.SSDMET):
             fh5['es_dm'] = self.es_dm
         return 
 
-    def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
+    def build(self, restore_imp = False, iaopao = False, chk_fname_load='', save_chk=True):
         self.dump_flags()
         dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -139,7 +139,7 @@ class DFSSDMET(ssdmet.SSDMET):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth(restore_imp)
+            ldm, caolo, cloao = self.lowdin_orth(restore_imp, iaopao)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = ssdmet.build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
             caoes = caolo @ cloes
