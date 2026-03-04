@@ -1,9 +1,0 @@
-# Input file for Ewald cluster generation
-poscarfile: "YAG_Ce.vasp"
-rCluster: 5
-rAIMP: 10
-rChgs: 20
-rSurface: 21
-cAtom: "Y"
-cAtomIndex: 5
-num_sites: 1200
