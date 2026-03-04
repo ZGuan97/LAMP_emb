@@ -1,5 +1,5 @@
 # AIMP environment read from input file (using AIMPEnvLoader)
-# Author: Teng Zhang <lishuoxue@pku.edu.cn>
+# Author: Teng Zhang <zhangtchem@stu.pku.edu.cn>
 # Author: Shuoxue Li <lishuoxue@pku.edu.cn>
 
 import numpy as np
