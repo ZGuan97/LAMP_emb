@@ -7,6 +7,7 @@ from pyscf.lo.orth import lowdin
 from pyscf import gto, scf, ao2mo
 
 from embed_sim.BNO_bath import get_RMP2_bath, get_UMP2_bath, get_ROMP2_bath
+from embed_sim import iao_helper
 
 import os
 
@@ -294,7 +295,7 @@ class SSDMET(lib.StreamObject):
             fh5['es_dm'] = self.es_dm
         return 
     
-    def lowdin_orth(self, restore_imp = False):
+    def lowdin_orth(self, restore_imp = False, iaopao = False):
         # lowdin orthonormalize
         caolo, cloao = lowdin_orth(self.mol)
         if restore_imp:
@@ -313,12 +314,16 @@ class SSDMET(lib.StreamObject):
             Q[:, imp_idx] = Q1
             Q[:, mask_env] = U[:, 0: cloao.shape[0] - len(imp_idx)]
             cloao = Q.T.conj() @ cloao
-            caolo = caolo @ Q
+            
+        if iaopao:
+            caolo = iao_helper.localize_iao(self.mol, self.mf_or_cas, lo2ao)
+            cloao = np.linalg.inv(caolo)
+            
 
         ldm = reduce(lib.dot, (cloao, self.dm, cloao.conj().T))
         return ldm, caolo, cloao
         
-    def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
+    def build(self, restore_imp = False, iaopao = False, chk_fname_load='', save_chk=True):
         self.dump_flags()
         dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
@@ -331,7 +336,7 @@ class SSDMET(lib.StreamObject):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth(restore_imp)
+            ldm, caolo, cloao = self.lowdin_orth(restore_imp, iaopao)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold, es_natorb=self.es_natorb)
             caoes = lib.dot(caolo, cloes)
