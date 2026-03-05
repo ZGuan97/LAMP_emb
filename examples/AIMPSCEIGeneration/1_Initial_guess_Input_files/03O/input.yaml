@@ -1,0 +1,32 @@
+type: energy
+verbose: 5
+cluster: 
+  dir: cluster.xyz # tda_2.xyz
+  basis:
+    O: ccpvdz
+  charge: -2
+  scf:
+    calc: HF
+    #xc: b3lyp
+    #tdopt:
+      #nstates: 10
+      #singlet: True
+      #max_cycle: 1000
+aimp:
+  dir: aimp.xyz
+  charge:
+    Al: 3
+    Y: 3
+    O: -2
+  basis:
+    Al: ccpvdz
+    Y: "gto.basis.parse(bse.get_basis('jorge-DZP-DKH',elements='Y',fmt='nwchem'))"
+    O: ccpvdz
+  scf:
+    calc: hf
+pointcharge:
+  rawxyzdir: rawChgs.xyz # generated from the last step
+  rawchgdir: rawCharges.dat  # generated from the last step
+  surfxyzdir: surfChgs.xyz
+  surfchgdir: surfaceCharges.dat
+chkfile: Ce.chk # output the checkpoint file of TDDFT
