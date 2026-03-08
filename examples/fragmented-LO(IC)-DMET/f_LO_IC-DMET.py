@@ -37,74 +37,77 @@ def make_es_dm(neo, open_shell, lo2eo, cloao, dm):
 
 def same_col_space(A, B, atol=1e-9):
     """
-    判断 A 与 B 的列空间是否相同（欧氏度量）。
-    返回 (is_same, sing_vals)，sing_vals 为 Q_A^T Q_B 的奇异值。
+    Check whether the column spaces of A and B are the same (under the Euclidean metric).
+    Return (is_same, sing_vals), where sing_vals are the singular values of Q_A^T Q_B.
     """
-    # 正交基（列满秩部分会被保留）
+
+    # Orthogonal basis (the full column-rank part will be retained)
     QA, _ = np.linalg.qr(A)
     QB, _ = np.linalg.qr(B)
 
-    # 取有效列（防止数值秩导致的多余零列）
+    # Select the effective columns (to avoid extra zero columns caused by numerical rank)
     rA = np.linalg.matrix_rank(A, tol=atol)
     rB = np.linalg.matrix_rank(B, tol=atol)
     QA = QA[:, :rA]
     QB = QB[:, :rB]
 
-    # 若维数不同，列空间不可能相同
+    # If the dimensions are different, the column spaces cannot be the same
     if rA != rB:
         return False, np.array([])
 
-    # 主夹角：奇异值应全 ~ 1
+    # Principal angles: the singular values should all be ~1
     s = np.linalg.svd(QA.T.conj() @ QB, compute_uv=False)
     is_same = np.allclose(s, np.ones_like(s), atol=10*atol)
     return is_same, s
 
 def verify_matrices_equivalence(A, B, tolerance=1e-12):
     """
-    验证矩阵 A 和 B 是否在容忍误差范围内相等。
-    
-    参数:
-    A -- 第一个矩阵
-    B -- 第二个矩阵
-    tolerance -- 容忍误差，默认为 1e-12
-    
-    返回:
-    True 如果 A 和 B 在容忍误差内相等，否则返回 False
+    Check whether matrices A and B are equal within a given tolerance.
+
+    Parameters:
+    A -- the first matrix
+    B -- the second matrix
+    tolerance -- the tolerance, default is 1e-12
+
+    Returns:
+    True if A and B are equal within the tolerance; otherwise False
     """
-    # 计算矩阵 A 和 B 的差异
+
+    # Compute the difference between matrices A and B
     difference = A - B
     frobenius_norm = np.linalg.norm(difference, 'fro')
 
-    # 打印差异的 Frobenius 范数
-    print("矩阵 A 和 B 的差异的 Frobenius 范数:", frobenius_norm)
+    # Print the Frobenius norm of the difference
+    print("Frobenius norm of the difference between A and B:", frobenius_norm)
 
-    # 检查是否接近零
+    # Check whether it is close to zero
     if np.allclose(A, B, atol=tolerance):
-        print("矩阵 A 和 B 是相同的矩阵（在容忍误差内）。")
+        print("Matrices A and B are identical (within the specified tolerance).")
         return True
     else:
-        print("矩阵 A 和 B 不是完全相同的矩阵。")
+        print("Matrices A and B are not identical.")
         return False
 
 
 def check_full_orthonormal(A, B, atol=1e-10):
     """
-    检查两组矩阵的列向量是否正交归一（包括各自内部与交叉部分）。
+    Check whether the column vectors of two sets of matrices are orthonormal
+    (including both internal and cross orthogonality).
 
-    参数:
+    Parameters:
         A, B : ndarray
-            两个矩阵（列向量集合）
+            Two matrices (sets of column vectors)
         atol : float
-            数值误差容忍阈值，默认 1e-10
+            Numerical tolerance, default 1e-10
 
-    返回:
+    Returns:
         results : dict
-            包含每个检查结果的布尔值与偏差范数
+            Contains the boolean result of each check and the corresponding deviation norm
     """
 
     results = {}
 
-    # ========= 1️⃣ 检查 A 自身的归一性与正交性 =========
+    # ========= Check normalization and orthogonality within A =========
     O_A = A.T.conj() @ A
     diag_A = np.diag(O_A)
     off_A = O_A - np.diag(diag_A)
@@ -113,7 +116,7 @@ def check_full_orthonormal(A, B, atol=1e-10):
     results["A_normalized"] = is_A_normalized
     results["A_orthogonal"] = is_A_orthogonal
 
-    # ========= 2️⃣ 检查 B 自身的归一性与正交性 =========
+    # ========= Check normalization and orthogonality within B =========
     O_B = B.T.conj() @ B
     diag_B = np.diag(O_B)
     off_B = O_B - np.diag(diag_B)
@@ -122,33 +125,33 @@ def check_full_orthonormal(A, B, atol=1e-10):
     results["B_normalized"] = is_B_normalized
     results["B_orthogonal"] = is_B_orthogonal
 
-    # ========= 3️⃣ 检查 A 与 B 是否互相正交 =========
+    # ========= Check orthogonality between A and B =========
     O_AB = A.T.conj() @ B
     is_AB_orthogonal = np.allclose(O_AB, 0, atol=atol)
     results["A_B_orthogonal"] = is_AB_orthogonal
 
-    # ========= 打印结果 =========
-    print("===== A 自身检查 =====")
-    print("归一性：", is_A_normalized)
-    print("正交性：", is_A_orthogonal)
-    #print("A 的重叠矩阵：\n", O_A)
+    # ========= Display results =========
+    print("===== A check =====")
+    print("Norm: ", is_A_normalized)
+    print("Orth: ", is_A_orthogonal)
+    #print("Overlap matrix of A:\n", O_A)
 
-    print("\n===== B 自身检查 =====")
-    print("归一性：", is_B_normalized)
-    print("正交性：", is_B_orthogonal)
-    #print("B 的重叠矩阵：\n", O_B)
+    print("\n===== B check =====")
+    print("Norm: ", is_B_normalized)
+    print("Orth: ", is_B_orthogonal)
+    #print("Overlap matrix of B:\n", O_B)
 
-    print("\n===== A 与 B 的交叉检查 =====")
-    print("是否互相正交：", is_AB_orthogonal)
-    #print("交叉重叠矩阵 O_AB = A.T.conj() @ B ：\n", O_AB)
+    print("\n===== A and B check =====")
+    print("orth: ", is_AB_orthogonal)
+    #print("Cross overlap matrix O_AB = A.T.conj() @ B:\n", O_AB)
 
-    # ========= 计算偏差指标 =========
+    # ========= Compute deviation metrics =========
     results["A_dev"] = np.linalg.norm(O_A - np.eye(O_A.shape[0]), 'fro')
     results["B_dev"] = np.linalg.norm(O_B - np.eye(O_B.shape[0]), 'fro')
     results["AB_dev"] = np.linalg.norm(O_AB, 'fro')
-    print(f"\nA 偏离单位矩阵: {results['A_dev']:.3e}")
-    print(f"B 偏离单位矩阵: {results['B_dev']:.3e}")
-    print(f"A-B 交叉偏离: {results['AB_dev']:.3e}")
+    print(f"\nA deviates from the identity matrix: {results['A_dev']:.3e}")
+    print(f"B deviates from the identity matrix: {results['B_dev']:.3e}")
+    print(f"A-B Cross deviation: {results['AB_dev']:.3e}")
 
     return results
 
@@ -266,19 +269,6 @@ mol_tot.spin = 1
 write_xyz(mol_tot, "mol_tot.xyz")
 mol_tot.build()
 mf = scf.rohf.ROHF(mol_tot).x2c().density_fit()
-#print("This is shape of ao2core:",ao2core.shape)
-#Build an initial guess for DMET SCF
-#mf.chkfile='CeNP2O2_rohf.chk'
-#mf.init_guess = 'chk'
-#mf.verbose = 4
-#mf.max_cycle = 2000
-#scfdat = chkfile.load(mf.chkfile,'scf')
-#mf.e_tot = scfdat['e_tot']
-#mf.mo_coeff = scfdat['mo_coeff']
-#mf.mo_occ = scfdat['mo_occ']
-#mf.mo_energy = scfdat['mo_energy']
-#mf.level_shift = 0.2
-#mf.kernel()
 
 
 
@@ -301,30 +291,22 @@ imp_A = ['Ce.*','O1.*','O2.*','O3.*']
 imp_A_indices = mol_tot.search_ao_label(imp_A)
 
 
-#=====================================拼接ao2eo=====================================
-#1.确定列数
-nA = len(imp_A_indices) # A 区行数 = A 区列数
+#=====================================stack ao2eo=====================================
+#1.Determine the number of columns
+nA = len(imp_A_indices) # A Number of rows in block A = number of columns in block A
 nbath = sum(B.shape[1] for B in bath_buffs)
 ncol_total = nA + nbath
 ao2eo = np.zeros((nbasis, ncol_total))
 
-#2.左上角块
+#2.Top-left block
 S = scf.hf.get_ovlp(mol_tot)
 ao2lo_old, lo2ao_old = lowdin(S), lowdin(S) @ S
-#ao2lo_old, lo2ao_old = lowdin(S), lowdin(S) @ S
-#B_indices = np.array([i for i in range(S.shape[0]) if i not in imp_A_indices])
-#lo2ao_A = lo2ao_old[:, imp_A_indices]
 S_AA = S[np.ix_(imp_A_indices, imp_A_indices)]
 X_AA = lowdin(S_AA)
-#X_AA_minus_1 = S_AA_1_2 which is X_AA in AO-DMET paper.
 ao2eo[np.ix_(imp_A_indices, imp_A_indices)] = X_AA
-#ao2imp = ao2eo[:, imp_A_indices]
-#LO2imp = lo2ao_old @ ao2imp
-#print("Check LO2imp")
-#Results = check_full_orthonormal(LO2imp, LO2imp, atol=1e-10)
 
-#3.右上角块
-col = len(imp_A_indices)  # 从 A 区列后开始
+#3.Upper-right block
+col = len(imp_A_indices)  # Start from the column immediately after block A
 for i, idx in enumerate(imp_bufs_indices):
     B = bath_buffs[i]   # shape = (len(idx), ncol)
     assert B.shape[0] == len(idx), (i, B.shape, len(idx))
@@ -333,24 +315,18 @@ for i, idx in enumerate(imp_bufs_indices):
     ao2eo[np.ix_(idx, np.arange(col, col + ncol))] = B
     col += ncol
 
-#4.右下角块
-# 1) 拼右下角：3_i 块对角
+#4.Lower-right block
+# 1) Assemble the lower-right block: 3_i block diagonal
 C3 = scipy.linalg.block_diag(*bath_leaves)   # shape: (sum nrow_i, sum ncol_i)
-# 2) 计算右下角在 ao2eo 里的连续起点                         
-nbuf = sum(len(idx) for idx in imp_bufs_indices)  # buffer 总行数（你右上角4_i所在的那些行）
-row0 = nA                                         # leaf 区从这里开始（按你图的分块顺序）
-col0 = nA                                         # bath 列从这里开始（你右上角就是从 A 后面开始填的）
-# 3) 塞进去
+# 2) Compute the contiguous start index of the lower-right block in ao2eo                         
+nbuf = sum(len(idx) for idx in imp_bufs_indices)  # Total number of buffer rows (the rows where your upper-right 4_i block sits)
+row0 = nA                                         # The leaf block starts here (following your block ordering in the diagram)
+col0 = nA                                         # The bath columns start here (your upper-right block is filled starting right after A)
+# 3) Insert it
 nr, nc = C3.shape
 ao2eo[row0:row0+nr, col0:col0+nc] = C3
 
-#all_indices = np.arange(ao2eo.shape[1])
-#bath_indices = np.setdiff1d(all_indices, imp_A_indices)
-#ao2bath = ao2eo[:, bath_indices]
-#LO2bath = lo2ao_old @ ao2bath
-#print("Check LO2bath")
-#Results = check_full_orthonormal(LO2bath, LO2bath, atol=1e-10)
-#np.savetxt("ao2eo2.txt", ao2eo, fmt="%.16e")
+
 
 #ERROR_EO = ao2eo - AO2EO
 Lo2eo = lo2ao_old @ ao2eo
@@ -365,20 +341,18 @@ plt.ylabel("Row index")
 plt.title("Nonzero pattern")
 plt.show()
 
-#=====================================拼接ao2core=====================================
-#1.确定列数
+#=====================================stack ao2core=====================================
+#1.Determine the number of columns
 nA = len(imp_A_indices)
 ncore = sum(B.shape[1] for B in core_buffs)
 ncol_total = nA + ncore
 ao2core_uncut = np.zeros((nbasis, ncol_total))
-#print("This is shape of ao2core before cut:",ao2core.shape)
-#print("This is shape of X_AA_minus_1",X_AA_minus_1.shape)
 
-#2.左上角块
+#2.Upper-left block
 ao2core_uncut[np.ix_(imp_A_indices, imp_A_indices)] = X_AA
 
-#3.右上角块
-col = len(imp_A_indices)  # 从 A 区列后开始
+#3.Upper-right block
+col = len(imp_A_indices)  # Start from the columns after block A
 for i, idx in enumerate(imp_bufs_indices):
     B = core_buffs[i]   # shape = (len(idx), ncol)
     assert B.shape[0] == len(idx), (i, B.shape, len(idx))
@@ -387,18 +361,17 @@ for i, idx in enumerate(imp_bufs_indices):
     ao2core_uncut[np.ix_(idx, np.arange(col, col + ncol))] = B
     col += ncol
 
-#4.右下角块
-# 1) 拼右下角：3_i 块对角
+#4.Lower-right block
+# 1)  Assemble the lower-right block: block diagonal of 3_i
 C4 = scipy.linalg.block_diag(*core_leaves)   # shape: (sum nrow_i, sum ncol_i)
-# 2) 计算右下角在 ao2eo 里的连续起点                         
-nbuf = sum(len(idx) for idx in imp_bufs_indices)  # buffer 总行数（你右上角4_i所在的那些行）
-row0 = nA                                         # leaf 区从这里开始（按你图的分块顺序）
-col0 = nA                                         # bath 列从这里开始（你右上角就是从 A 后面开始填的）
-# 3) 塞进去
+# 2) Compute the contiguous start index of the lower-right block in ao2eo                            
+nbuf = sum(len(idx) for idx in imp_bufs_indices)  # Total number of buffer rows (the rows where your upper-right 4_i block sits)
+row0 = nA                                         # The leaf block starts here (following your block ordering in the diagram)
+col0 = nA                                         # The bath columns start here (your upper-right block is filled starting right after A)
+# 3) Insert it
 nr, nc = C4.shape
 ao2core_uncut[row0:row0+nr, col0:col0+nc] = C4
 ao2core = ao2core_uncut[:, nA:] #cut
-#np.savetxt("ao2core2.txt", ao2eo, fmt="%.16e")
 
 #ERROR_CORE = ao2core - AO2CORE
 plt.imshow(np.abs(ao2core) > 1e-12, cmap='gray', origin='upper')
@@ -408,16 +381,6 @@ plt.title("Nonzero pattern")
 plt.show()
 
 
-#LO2imp = lo2ao_old @ ao2imp
-#LO2bath = lo2ao_old @ ao2bath
-#LO2core = lo2ao_old @ ao2core
-
-#print("Check LO2imp LO2bath")
-#Results = check_full_orthonormal(LO2imp, LO2bath, atol=1e-10)
-#print("Check LO2bath LO2core")
-#Results = check_full_orthonormal(LO2bath, LO2core, atol=1e-10)
-#print("Check LO2imp LO2core")
-#Results = check_full_orthonormal(LO2imp, LO2core, atol=1e-10)
 
 
 
@@ -428,7 +391,6 @@ print("This is shape of ao2eo:",ao2eo.shape)
 
 hcore = mf.get_hcore()
 dm_core = 2 * ao2core @ ao2core.T.conj()
-#print("This is shape of dm_core:",dm_core.shape)
 vj, vk = mf.get_jk(dm=dm_core)
 eo_hcore_tilde = reduce(lib.dot,(ao2eo.conj().T, hcore + vj - 0.5 * vk, ao2eo))
 eo_S = reduce(lib.dot,(ao2eo.conj().T, S, ao2eo))
@@ -481,15 +443,8 @@ es_mf.get_ovlp = lambda *args: eo_S
 es_mf.with_df._cderi = make_es_cderi(title, ao2eo, mf.with_df)
 es_mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol_tot.search_ao_label(['Ce.*']),power=0.2)
 
-#dma, dmb = mf.make_rdm1()
-#dm = np.stack((dma, dmb), axis=0)
-#lo_dm = lo2ao_old @ dm @ lo2ao_old.T.conj()
-#lo2eo = lo2ao_old @ ao2eo
-#neo = lo2eo.shape[1]
-#es_dm = make_es_dm(neo, True, lo2eo, lo2ao_old, dm)
 
 es_mf.kernel()
-#err = es_mf.e_tot + mf.energy_tot(dm=dm_core) - mf.e_tot
 
 
 nes = ao2eo.shape[1]
