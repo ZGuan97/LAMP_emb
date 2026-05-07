@@ -304,10 +304,10 @@ class SSDMET(lib.StreamObject):
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
     
-    def lowdin_orth(self, restore_imp = False):
+    def lowdin_orth(self, preserve_imp = False):
         # lowdin orthonormalize
         caolo, cloao = lowdin_orth(self.mol)
-        if restore_imp:
+        if preserve_imp:
             imp_idx = self.imp_idx
             mask_env = np.ones(len(caolo), dtype=bool)
             mask_env[imp_idx] = False
@@ -328,7 +328,7 @@ class SSDMET(lib.StreamObject):
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao
         
-    def build(self, restore_imp = False, chk_fname_load='', save_chk=True):
+    def build(self, preserve_imp = False, chk_fname_load='', save_chk=False):
         self.dump_flags()
         self.dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
         # self.dm = self.mf_or_cas.make_rdm1()
@@ -338,7 +338,7 @@ class SSDMET(lib.StreamObject):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth(restore_imp)
+            ldm, caolo, cloao = self.lowdin_orth(preserve_imp)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
             caoes = caolo @ cloes

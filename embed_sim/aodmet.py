@@ -137,7 +137,7 @@ class AODMET(ssdmet.SSDMET):
         ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
         return ldm, caolo, cloao, ovlp
         
-    def build(self, chk_fname_load='', save_chk=True):
+    def build(self, chk_fname_load='', save_chk=False):
         self.dump_flags()
         self.dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         # self.dm = self.mf_or_cas.make_rdm1()

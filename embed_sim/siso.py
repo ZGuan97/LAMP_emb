@@ -46,7 +46,7 @@ def make_rdm1_splus(bra, ket, norb, nelec, spin=None): # increase M_S of ket by 
 
 # SISO object for SOC calculation, based on multi-configuration calculation 
 class SISO():
-    def __init__(self, title, mc, statelis=None, amfi=False, save_mag=True, save_Hmat=False, save_old_Hal=False, verbose=5):        
+    def __init__(self, title, mc, statelis=None, amfi=False, save_mag=True, save_Hmat=True, save_old_Hal=False, verbose=5):        
         self.title = title
         self.mol = mc.mol
         self.mc = mc
@@ -291,6 +291,7 @@ class SISO():
 
                     if S1 == S2 and MS1 == MS2:
                         e_states = np.asarray(self.mc.e_states) # TODO: Fix this in MC module
+                        e_states = e_states - np.min(e_states)
                         self.SOC_Hamiltonian[np.ix_(self.state_idx(S1, MS1), self.state_idx(S2, MS2))] += np.diag(e_states[self.casscf_state_idx[S1]])
         if self.save_Hmat:
             np.savetxt('myHmat', self.SOC_Hamiltonian)
@@ -316,7 +317,7 @@ class SISO():
         if self.save_old_Hal:
             np.savetxt('old_Hal', old_Hal)
 
-    def solve(self, nprint=4, ncomp=10):
+    def solve(self, nprint, ncomp):
         myeigval, myeigvec = np.linalg.eigh(self.SOC_Hamiltonian)
 
         mag_ene =  (myeigval-min(myeigval))*219474.63
@@ -334,11 +335,11 @@ class SISO():
         print(f'mag energy {mag_ene[:20]}')
         return 
             
-    def kernel(self):
+    def kernel(self, nprint=4, ncomp=10):
         self.calc_z()
         self.calc_Y()
         self.calc_h()
-        self.solve()
+        self.solve(nprint, ncomp)
         return
     
     def density_fit(self, with_df=None):

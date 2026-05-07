@@ -104,8 +104,9 @@ def sacasscf_nevpt2_casci_ver(mc):
             mc_ci = mcscf.CASCI(mc._scf, mc.ncas, mc.nelecas)
             mc_ci.nelecas = _unpack_nelec(mc.nelecas, spin)
             mc_ci.fcisolver.spin = spin
-            mc_ci.fix_spin_(shift=0.5, ss=(spin/2)*(spin/2+1))
+            mc_ci.fix_spin_(shift=0.2, ss=(spin/2)*(spin/2+1))
             mc_ci.fcisolver.nroots = nroots[i] # this is important for convergence of CASCI
+            mc_ci.fcisolver.max_space = np.sum(nroots) * 10
             mc_ci.kernel(mc.mo_coeff)
             nroot = nroots[i]
             for iroot in range(0, nroot):
