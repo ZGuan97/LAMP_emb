@@ -28,26 +28,42 @@ mol = gto.M(atom = '''
 impurity = {
     'name': 'Co',
     'aolabels': 'Co.*',
+    'charge': 2,
 }
 
 ligands = [
-    {'name': 'L1', 'aolabels': ['1 S.*', '5 H.*']},
-    {'name': 'L2', 'aolabels': ['2 S.*', '8 H.*']},
-    {'name': 'L3', 'aolabels': ['3 S.*', '6 H.*']},
-    {'name': 'L4', 'aolabels': ['4 S.*', '7 H.*']},
+    {'name': 'L1', 'aolabels': ['1 S.*', '5 H.*'], 'charge': -1},
+    {'name': 'L2', 'aolabels': ['2 S.*', '8 H.*'], 'charge': -1},
+    {'name': 'L3', 'aolabels': ['3 S.*', '6 H.*'], 'charge': -1},
+    {'name': 'L4', 'aolabels': ['4 S.*', '7 H.*'], 'charge': -1},
 ]
 
 fragments = [ligand['aolabels'] for ligand in ligands]
+fragment_charges = [ligand['charge'] for ligand in ligands]
 
 mydmet = fragment.FDMET(
     mol,
     title=title,
     imp_idx=impurity['aolabels'],
+    imp_charge=impurity['charge'],
     fragments=fragments,
+    fragment_charges=fragment_charges,
+    fragment_scf='cahf',
+    fragment_scf_options={
+        'ncas': 5,
+        'nelecas': 7,
+        'cahf_spin': 3,
+        'diis': 'rdiis',
+        'rdiis_prop': 'dS',
+        'rdiis_imp_idx': ['Co.*d'],
+        'rdiis_power': 0.2,
+        'max_cycle': 200,
+        'level_shift': 2.0,
+    },
 )
-mydmet.build()
+mydmet.build(fragment_scf_verbose=3)
 
-ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
+ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='ccpvtz', threshold=0.5)
 
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)

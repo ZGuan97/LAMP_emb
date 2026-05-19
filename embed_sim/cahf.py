@@ -409,7 +409,8 @@ class CAHF(scf.rohf.ROHF):
         return init_guess_by_chkfile(self.mol, chkfile, project=project)
     
     def gen_response(self, mo_coeff=None, mo_occ=None,
-                      with_j=True, hermi=0, max_memory=None):
+                      with_j=True, hermi=0, max_memory=None,
+                      *args, **kwargs):
         assert isinstance(self, CAHF)
         mol = self.mol
         f, a, b = self.frac, self.alpha, self.beta
@@ -429,4 +430,5 @@ class CAHF(scf.rohf.ROHF):
 
 
 if __name__ == '__main__':
-    get_coeffs(5, 2, 2)
+    f, coulomb_a, exchange_b, alpha, beta = get_coeffs(ncas=5, nelecas=5, spin=3)
+    print(f, coulomb_a, exchange_b)
