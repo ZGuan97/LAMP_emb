@@ -31,6 +31,5 @@ occ = cahf.CAHF_get_occ(ncas, nelec)(mf1)
 
 mf2 = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c().newton()
 mf2.max_cycle=200
-mf2.level_shift = 0.5
 mf2.conv_tol = 1e-9
 mf2.kernel(mo, occ)
