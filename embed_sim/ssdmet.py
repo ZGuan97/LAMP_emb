@@ -1,6 +1,6 @@
 import numpy as np
 from functools import reduce
-from scipy.linalg import block_diag
+from scipy.linalg import block_diag, svd
 import h5py
 
 from pyscf.lo.orth import lowdin
@@ -39,13 +39,31 @@ def mf_or_cas_make_rdm1s(mf_or_cas):
         raise TypeError('starting point not supported',  mf_or_cas.__class__)
     return np.stack((dma, dmb), axis=0)
 
-def lowdin_orth(mol, ovlp=None):
+def lowdin_orth(mol, ovlp=None, imp_idx=None, preserve_imp=False):
     # lowdin orthonormalize
     if ovlp is None:
         s = mol.intor_symmetric('int1e_ovlp')
     else:
         s = ovlp
     caolo, cloao = lowdin(s), lowdin(s) @ s # caolo=lowdin(s)=s^-1/2, cloao=lowdin(s)@s=s^1/2
+    if preserve_imp:
+        if imp_idx is None:
+            raise ValueError("imp_idx is required when preserve_imp=True")
+        mask_env = np.ones(len(caolo), dtype=bool)
+        mask_env[imp_idx] = False
+
+        Q1 = cloao[:, imp_idx]
+        Q1, _ = np.linalg.qr(Q1) # orthonormalize
+        P = np.eye(*cloao.shape) - Q1 @ Q1.T.conj()
+        B = P @ cloao[:, mask_env]
+        U, S, Vh = svd(B, full_matrices=False)
+
+        Q = np.zeros(cloao.shape)
+        Q[:, imp_idx] = Q1
+        Q[:, mask_env] = U[:, 0: cloao.shape[0] - len(imp_idx)]
+        cloao = Q.T.conj() @ cloao
+        caolo = caolo @ Q
+
     return caolo, cloao
     
 
@@ -298,36 +316,6 @@ class SSDMET(lib.StreamObject):
             fh5['es_int2e'] = self.es_int2e
         return 
     
-    def lowdin_orth(self):
-        # lowdin orthonormalize
-        caolo, cloao = lowdin_orth(self.mol)
-        ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
-        return ldm, caolo, cloao
-    
-    def lowdin_orth(self, preserve_imp = False):
-        # lowdin orthonormalize
-        caolo, cloao = lowdin_orth(self.mol)
-        if preserve_imp:
-            imp_idx = self.imp_idx
-            mask_env = np.ones(len(caolo), dtype=bool)
-            mask_env[imp_idx] = False
-
-            Q1 = cloao[:, imp_idx]
-            Q1, _ = np.linalg.qr(Q1) # orthonormalize
-            P = np.eye(*cloao.shape) - Q1 @ Q1.T.conj()
-            B = P @ cloao[:, mask_env]
-            from scipy.linalg import svd
-            U, S, Vh = svd(B, full_matrices=False)
-
-            Q = np.zeros(cloao.shape)
-            Q[:, imp_idx] = Q1
-            Q[:, mask_env] = U[:, 0: cloao.shape[0] - len(imp_idx)]
-            cloao = Q.T.conj() @ cloao
-            caolo = caolo @ Q
-
-        ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
-        return ldm, caolo, cloao
-        
     def build(self, preserve_imp = False, chk_fname_load='', save_chk=False):
         self.dump_flags()
         self.dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
@@ -338,7 +326,11 @@ class SSDMET(lib.StreamObject):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth(preserve_imp)
+            caolo, cloao = lowdin_orth(
+                self.mol, imp_idx=self.imp_idx,
+                preserve_imp=preserve_imp
+            )
+            ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
             caoes = caolo @ cloes

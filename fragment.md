@@ -158,6 +158,61 @@ $$
 3. 若 fragment spaces 之间没有重叠，bath orbitals 的跨 fragment 重叠主要来自全局 AO overlap；需要在同一个全局正交基或全局 AO metric 下处理。
 4. 需要设定 density occupation threshold，将接近 0 的环境自然轨道归为 frozen virtual，将接近 2 的环境自然轨道归为 frozen occupied，其余轨道作为 bath orbitals。
 
+### Frozen occupied 轨道与整数电子数问题
+
+标准 DMET 中，FO、bath 和 FV 来自同一个全局 reference density 的同一次正交轨道分解。因此 FO 轨道天然正交归一，FO 上的电子数可以写成
+
+$$
+N_{\mathrm{FO}} = 2 n_{\mathrm{FO}},
+$$
+
+其中 $n_{\mathrm{FO}}$ 是 frozen occupied orbital 的个数。embedded cluster 的电子数随之为
+
+$$
+N_{\mathrm{emb}} = N_{\mathrm{tot}} - N_{\mathrm{FO}},
+$$
+
+也是整数，可以直接用于后续 ROHF、CASCI 或 CASSCF 计算。
+
+在 fragment-based construction 中，每个 fragment 都会给出一组局部 FO 候选轨道：
+
+$$
+C_{\mathrm{FO}}^{(1)}, C_{\mathrm{FO}}^{(2)}, \ldots
+$$
+
+这些轨道来自不同的局部 reference density，并且每个局部 reference 都包含同一个 impurity。将它们嵌回母体 AO basis 后，通常既不彼此正交，也不一定与合并后的 impurity+bath 空间严格正交。因此不能简单拼接这些 FO 轨道。若只做线性正交化，得到的正交轨道虽然数值上可用，但它们不再对应原始 fragment density 中占据数严格为 2 的自然轨道；FO 上电子数也不能再简单解释为 $2n_{\mathrm{FO}}$。这会导致 embedded space 的整数电子数无法严格指定。
+
+目前有三类可能方案。当前实现选择方案 1 作为默认路线，因为它不需要从 fragment-local FO 轨道推断全局整数电子数，算法语义最干净，也最容易调试。
+
+1. 不构造 FO。
+   - 这是当前实现采用的默认方案。
+   - 设置 `fo_orb = []`，并令 `fv_orb` 为 fixed impurity + bath 的全局正交补空间。
+   - embedded cluster 的电子数直接取全体系电子数：
+
+$$
+N_{\mathrm{emb}} = N_{\mathrm{tot}}.
+$$
+
+   - 因为 $N_{\mathrm{FO}}=0$，电子数定义保持整数且没有额外解释。
+   - 优点是不会重复计数 fragment-local occupied electron，也不会把非正交 FO 候选轨道强行解释为整数电子数。
+   - 缺点是 embedded space 的电子数不再通过 FO 压缩；`impurity + bath` 轨道数必须足够容纳全体系电子数，否则 embedded ROHF/CAS 无法定义。
+   - 若出现 $N_\alpha > N_{\mathrm{emb\ orb}}$，代码应直接报错，而不是尝试隐式构造 FO 或改变电子数。
+
+2. 从全局近似 density 重新定义 FO。
+   - 不直接合并 fragment-local FO 轨道，而是先把 fragment-local density 映回母体 AO basis。
+   - 为避免 impurity 被重复计数，可以优先只拼装 ligand/environment block 的 density。
+   - 在 fixed impurity + merged bath 的全局正交补空间中对该近似 environment density 做自然轨道分解。
+   - 自然占据数接近 2 的全局正交轨道定义为 FO，自然占据数接近 0 的轨道定义为 FV。
+   - 这样 FO 轨道来自一次全局 metric 下的自然轨道分解，可以恢复整数规则 $N_{\mathrm{FO}}=2n_{\mathrm{FO}}$。
+   - 这是后续最接近标准 SSDMET 逻辑的推荐方向。
+
+3. 只冻结明确的全局 core 轨道。
+   - 不试图恢复所有 fragment-local FO。
+   - 只选择远离 impurity+bath、自然占据稳定接近 2、且可以根据 AO label、壳层、能量或 impurity 成分判断为深层 core 的轨道。
+   - 该方案物理上更保守，能保持整数电子数，但压缩效率较低。
+
+因此当前 fragment-DMET 的 bath construction 明确定义为只构造 `impurity + bath`，不尝试从 fragment reference 中恢复全局 frozen occupied space。方案 2 和方案 3 暂时作为后续可选扩展，而不是当前默认算法的一部分。
+
 ## 与标准 DMET 的关系
 
 标准 DMET 的 bath orbitals 来自全局 reference density：
@@ -256,7 +311,7 @@ $$
 
 当前 CAHF 的默认 active-space 参数为 `ncas=5, nelecas=7`，对应当前 Co d7 示例的最小默认值。更一般体系应通过 `fragment_scf_options` 显式传入。`FDMET` 根据 `imp_charge + fragment_charges[f]` 计算第 $f$ 个 fragment 子体系的总 charge，并把该总 charge 传给底层 `run_fragment_scf()`；如果直接调用 `run_fragment_scf()`，也必须显式传入总 `charge`。没有显式 charge 时直接报错。
 
-局部 fragment SCF 的输出等级由 `build(fragment_scf_verbose=3)` 或 `build_fragment(fragment_scf_verbose=3)` 控制，与外层 `FDMET.verbose` 分开。该参数只属于本次 build 行为，不保存在 `FDMET` 构造器中。
+局部 fragment SCF 的输出等级由 `FDMET.build(fragment_scf_verbose=3)` 控制，与外层 `FDMET.verbose` 分开。该参数只属于本次 build 行为，不保存在 `FDMET` 构造器中。
 
 当前 fragment-local CAHF 的单电子 Hamiltonian 只来自截断后的 `impurity + ligand_f` 局部 molecule，即 PySCF 在该 `fragment_mol` 上计算的 `hcore`。其他 ligand fragment 不在该局部 molecule 中，因此它们的核吸引势、电子库仑势、净负电荷静电场以及由此导致的轨道极化目前都没有进入第 `f` 个 fragment CAHF。换言之，`fragment_charges` 当前只决定对应局部 molecule 的电子数，还没有作为 point charge、embedding potential 或全局投影势作用到其他 fragment 的局部参考计算中。
 
@@ -335,12 +390,7 @@ fragment_scf_options={
 其中 `rdiis_imp_idx` 在每个局部 `fragment_mol` 中解析，因此可以直接使用局部 AO label/pattern。
 若没有显式设置 `rdiis_mute`，RDIIS 的输出跟随 `fragment_scf_verbose`：`fragment_scf_verbose < logger.INFO` 时静音，因此默认 `fragment_scf_verbose=3` 不输出 RDIIS entropy；`fragment_scf_verbose=4` 时输出。
 
-### 关键函数草案
-
-```python
-def build_fragment_baths(mol, impurity_idx, fragment_idx, fragment_scf="cahf", threshold=1e-13):
-    """Build DMET bath orbitals from fragment-local reference densities."""
-```
+### 关键函数
 
 ```python
 def run_fragment_scf(mol, impurity_idx, fragment_idx, charge, fragment_scf="cahf"):
@@ -353,9 +403,33 @@ def build_fragment(mol, impurity_idx, fragment_idx, charge, fragment_scf="cahf",
 ```
 
 ```python
-def bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=None, threshold=1e-13):
+def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=None, threshold=1e-13):
     """Construct bath orbitals from one fragment density matrix."""
 ```
+
+### 当前新增：fragment-local bath orbital construction
+
+`embed_sim/fragment.py` 现在已经开始实现 bath orbital construction。当前实现遵循“尽量复用 SSDMET 路径”的原则：
+
+1. 对每个 impurity-ligand fragment 先运行 `run_fragment_scf()` 得到局部 reference。
+2. 用 `ssdmet.mf_or_cas_make_rdm1s()` 提取 fragment-local AO density。
+3. 在 `fragment_bath_from_fragment_density()` 中调用模块级 `ssdmet.lowdin_orth(..., preserve_imp=True)`，复用现有固定 impurity 的 Lowdin 正交化实现。
+4. 将局部 density 限制到 `local_imp_idx + local_fragment_idx` 的正交轨道子空间。
+5. 只对 fragment/environment density block 做自然轨道分解，按标准 SSDMET 的环境自然占据数阈值规则选出 bath orbitals。
+6. 利用 `FragmentReference.local_to_global_idx` 将局部 AO coefficient 嵌回母体 molecule 的全局 AO basis。
+7. 合并所有 fragment bath 后，在母体 AO overlap metric 下投影掉全局固定 impurity 分量，并对 bath block 做 metric orthonormalization。
+8. `FDMET.build()` 现在会设置：
+   - `es_orb = [fixed impurity orbitals, merged fragment bath orbitals]`
+   - `fo_orb = []`
+   - `fv_orb =` 固定 impurity 和 bath 的全局正交补空间
+   - `es_int1e` 和 `es_int2e`，用于后续嵌入计算
+   - `es_mf = FDMET.CAHF(...)`，嵌入空间 mean-field 默认使用 CAHF 而不是 ROHF
+
+当前 `fo_orb` 明确为空。这不是临时占位，而是当前默认算法选择：fragment-local occupied orbitals 来自多个重叠的局部子体系，不能直接合并为全局 frozen occupied space，否则容易重复计数电子。当前实现令 `nfo = 0`，embedded electron number 等于全体系电子数。若 `impurity + bath` 轨道数不足以容纳该电子数，代码应直接报错。
+
+当前 `es_occ` 使用 embedded space 内的 Aufbau-like 初猜，占据数只用于构造 embedded CAHF 的初始密度。它不是由全局 reference density 对角化得到的自然占据数。fragment bath 的自然占据数目前只作为诊断信息保留。
+
+`FDMET.CAHF()` 仿照 `SSDMET.ROHF()` 构造嵌入空间 mean-field 对象。它接收和 `fragment_scf_options` 一致的常用 CAHF/SCF 参数，例如 `ncas`、`nelecas`、`cahf_spin`、`max_cycle`、`level_shift` 和 `diis`。由于嵌入空间没有 PySCF AO labels，若 embedded CAHF 的 RDIIS 参数中提供的是 AO label/pattern 形式的 `rdiis_imp_idx`，当前实现会改用嵌入空间中的 impurity block index。
 
 ## 开放问题
 

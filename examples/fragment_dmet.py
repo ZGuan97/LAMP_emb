@@ -15,7 +15,7 @@ mol = gto.M(atom = '''
         H                  5            1.30714645    1            109.47121982    4            -180                           0
         H                  3            1.30714645    1            109.47121982    4            60                             0
     ''',
-    basis={'default':'ccpvtz','S':'ccpvdz','H':'ccpvdz'}, symmetry=0 ,spin = 3,charge = -2,verbose= 4)
+    basis={'default':'def2tzvp','s':'6-31G*','H':'6-31G*'}, symmetry=0 ,spin = 3,charge = -2,verbose= 4)
 
 
 
@@ -38,6 +38,10 @@ ligands = [
     {'name': 'L4', 'aolabels': ['4 S.*', '7 H.*'], 'charge': -1},
 ]
 
+# ligands = [
+#     {'name': 'L', 'aolabels': ['1 S.*', '5 H.*', '2 S.*', '8 H.*', '3 S.*', '6 H.*', '4 S.*', '7 H.*'], 'charge': -4},
+# ]
+
 fragments = [ligand['aolabels'] for ligand in ligands]
 fragment_charges = [ligand['charge'] for ligand in ligands]
 
@@ -49,6 +53,7 @@ mydmet = fragment.FDMET(
     fragments=fragments,
     fragment_charges=fragment_charges,
     fragment_scf='cahf',
+    keep_fv_orbitals=False,
     fragment_scf_options={
         'ncas': 5,
         'nelecas': 7,
@@ -57,16 +62,55 @@ mydmet = fragment.FDMET(
         'rdiis_prop': 'dS',
         'rdiis_imp_idx': ['Co.*d'],
         'rdiis_power': 0.2,
-        'max_cycle': 200,
-        'level_shift': 2.0,
+        'max_cycle': 500,
+        'level_shift': 4.0,
     },
 )
 mydmet.build(fragment_scf_verbose=3)
+mydmet.es_mf.run()
+fv0 = mydmet.nimp + mydmet.nbath + mydmet.nembedded_fo
+fv1 = fv0 + mydmet.nkept_fv
+mo = mydmet.es_mf.mo_coeff
+mo_occ = mydmet.es_mf.mo_occ
+fv_weight = np.sum(np.abs(mo[fv0:fv1, :])**2, axis=0)
+occ_mask = mo_occ > 1e-8
+ncas = mydmet.fragment_scf_options['ncas']
+nelecas = mydmet.fragment_scf_options['nelecas']
+ncore = (mydmet.es_mf.mol.nelectron - nelecas) // 2
+active_slice = slice(ncore, ncore+ncas)
+dm = mydmet.es_mf.make_rdm1(mo, mo_occ)
+if dm.ndim == 3:
+    dm = dm[0] + dm[1]
+
+print('\n=== FV projection diagnostic ===')
+print('embedded dimensions: nimp = %d, nbath = %d, nembedded_fo = %d, nkept_fv = %d, nes = %d' %
+      (mydmet.nimp, mydmet.nbath, mydmet.nembedded_fo,
+       mydmet.nkept_fv, mydmet.nes))
+print('max MO FV weight = %.12e at MO %d' %
+      (fv_weight.max(), int(np.argmax(fv_weight))))
+print('max occupied/active MO FV weight = %.12e' %
+      fv_weight[occ_mask].max())
+print('sum occupied/active occ-weighted FV weight = %.12e' %
+      np.dot(mo_occ, fv_weight))
+print('sum active MO FV weight = %.12e' %
+      np.sum(fv_weight[active_slice]))
+print('density trace on kept-FV block = %.12e' %
+      np.trace(dm[fv0:fv1, fv0:fv1]).real)
+print('largest 10 occupied/active FV weights:')
+for idx in np.argsort(fv_weight[occ_mask])[-10:][::-1]:
+    mo_idx = np.nonzero(occ_mask)[0][idx]
+    print('  MO %4d occ %12.8f FV weight %.12e' %
+          (mo_idx, mo_occ[mo_idx], fv_weight[mo_idx]))
+
+raise
 
 ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='ccpvtz', threshold=0.5)
 
+
+
 es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
 es_cas.kernel(es_mo)
+
 
 es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
 es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr

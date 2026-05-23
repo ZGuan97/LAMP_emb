@@ -131,7 +131,11 @@ class DFSSDMET(ssdmet.SSDMET):
         loaded = self.load_chk(chk_fname_load)
         
         if not loaded:
-            ldm, caolo, cloao = self.lowdin_orth(restore_imp)
+            caolo, cloao = ssdmet.lowdin_orth(
+                self.mol, imp_idx=self.imp_idx,
+                preserve_imp=restore_imp
+            )
+            ldm = reduce(np.dot,(cloao,self.dm,cloao.conj().T))
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = ssdmet.build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
             caoes = caolo @ cloes

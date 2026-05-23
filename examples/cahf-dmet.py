@@ -1,6 +1,8 @@
 import numpy as np
 from pyscf import gto, scf
-from embed_sim import cahf, myavas
+from embed_sim import ssdmet, sacasscf_mixer, siso
+
+title = 'CoSH4'
 
 def get_mol(dihedral):
      mol = gto.M(atom = '''
@@ -20,16 +22,30 @@ def get_mol(dihedral):
 
 mol = get_mol(0)
 
-mf1 = scf.rohf.ROHF(mol).x2c()
-mf1.init_guess = 'atom' # don't ask why, just try
-mf1.max_cycle=0
-mf1.kernel()
 
-ncas, nelec, mo = myavas.avas(mf1, ['Co 3d'], threshold=0.5)
-ncas, nelec = 5, 7
-occ = cahf.CAHF_get_occ(ncas, nelec)(mf1)
+from embed_sim import cahf, rdiis
+mf = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c()
+mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol.search_ao_label(['Co.*d']), power=0.2)
 
-mf2 = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c().newton()
-mf2.max_cycle=200
-mf2.conv_tol = 1e-9
-mf2.kernel(mo, occ)
+chk_fname = title + '_cahf.chk'
+mf.chkfile = chk_fname
+mf.init_guess = 'chk'
+mf.level_shift = 2.0
+mf.max_cycle = 200
+mf.max_memory = 100000
+mf.kernel()
+
+mydmet = ssdmet.SSDMET(mf, title=title, imp_idx='Co.*')
+# if impurity is not assigned, the orbitals on the first atom is chosen as impurity
+mydmet.build()
+
+ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='def2tzvp', threshold=0.5)
+
+es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
+es_cas.kernel(es_mo)
+
+es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
+es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
+total_cas = mydmet.total_cas(es_cas)
+mysiso = siso.SISO(title, total_cas)
+mysiso.kernel()
