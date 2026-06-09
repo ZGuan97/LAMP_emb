@@ -24,34 +24,34 @@ mol = gto.M(atom = '''
 #   1 S(L1), 2 S(L2), 3 S(L3), 4 S(L4)
 #   5 H(L1), 6 H(L3), 7 H(L4), 8 H(L2)
 #
-# Impurity and ligand fragments are defined with PySCF AO labels.
+# Impurity and ligand fragments are defined by atom IDs.
 impurity = {
     'name': 'Co',
-    'aolabels': 'Co.*',
+    'atoms': 'Co',
     'charge': 2,
 }
 
 ligands = [
-    {'name': 'L1', 'aolabels': ['1 S.*', '5 H.*'], 'charge': -1},
-    {'name': 'L2', 'aolabels': ['2 S.*', '8 H.*'], 'charge': -1},
-    {'name': 'L3', 'aolabels': ['3 S.*', '6 H.*'], 'charge': -1},
-    {'name': 'L4', 'aolabels': ['4 S.*', '7 H.*'], 'charge': -1},
+    {'name': 'L1', 'atoms': [1, 5], 'charge': -1},
+    {'name': 'L2', 'atoms': [2, 8], 'charge': -1},
+    {'name': 'L3', 'atoms': [3, 6], 'charge': -1},
+    {'name': 'L4', 'atoms': [4, 7], 'charge': -1},
 ]
 
 # ligands = [
-#     {'name': 'L', 'aolabels': ['1 S.*', '5 H.*', '2 S.*', '8 H.*', '3 S.*', '6 H.*', '4 S.*', '7 H.*'], 'charge': -4},
+#     {'name': 'L', 'atoms': [1, 5, 2, 8, 3, 6, 4, 7], 'charge': -4},
 # ]
 
-fragments = [ligand['aolabels'] for ligand in ligands]
-fragment_charges = [ligand['charge'] for ligand in ligands]
+ligand_atoms = [ligand['atoms'] for ligand in ligands]
+ligand_charges = [ligand['charge'] for ligand in ligands]
 
 mydmet = fragment.FDMET(
     mol,
     title=title,
-    imp_idx=impurity['aolabels'],
+    imp_atoms=impurity['atoms'],
     imp_charge=impurity['charge'],
-    fragments=fragments,
-    fragment_charges=fragment_charges,
+    ligand_atoms=ligand_atoms,
+    ligand_charges=ligand_charges,
     fragment_scf='cahf',
     keep_fv_orbitals=False,
     embedded_init_guess='fragment_density',
@@ -70,7 +70,8 @@ mydmet = fragment.FDMET(
 )
 mydmet.build(fragment_scf_verbose=3)
 mydmet.es_mf.run()
-fv0 = mydmet.nimp + mydmet.nbath + mydmet.nembedded_fo
+
+fv0 = len(mydmet.imp_idx) + mydmet.nbath + mydmet.nappended_fo
 fv1 = fv0 + mydmet.nkept_fv
 mo = mydmet.es_mf.mo_coeff
 mo_occ = mydmet.es_mf.mo_occ
@@ -85,8 +86,8 @@ if dm.ndim == 3:
     dm = dm[0] + dm[1]
 
 print('\n=== FV projection diagnostic ===')
-print('embedded dimensions: nimp = %d, nbath = %d, nembedded_fo = %d, nkept_fv = %d, nes = %d' %
-      (mydmet.nimp, mydmet.nbath, mydmet.nembedded_fo,
+print('embedded dimensions: nimp = %d, nbath = %d, nappended_fo = %d, nkept_fv = %d, nes = %d' %
+      (len(mydmet.imp_idx), mydmet.nbath, mydmet.nappended_fo,
        mydmet.nkept_fv, mydmet.nes))
 print('max MO FV weight = %.12e at MO %d' %
       (fv_weight.max(), int(np.argmax(fv_weight))))

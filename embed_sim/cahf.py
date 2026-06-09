@@ -143,7 +143,7 @@ def CAHF_get_occ(ncas, nelecas):
         # mo_occ = _fill_rohf_occ(mo_energy, mo_ea, mo_eb, ncore, nopen)
 
         ncore = int((np.sum(np.array(mf.mol.nelec))-nelecas)/2)
-        mo_occ = np.zeros(mf.mol.nao)
+        mo_occ = np.zeros_like(mo_energy)
         mo_occ[:ncore] = 2
         mo_occ[ncore:ncore+ncas] = nelecas/ncas
 

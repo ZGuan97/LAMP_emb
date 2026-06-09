@@ -291,10 +291,10 @@ $$
 
 已新增 `embed_sim/fragment.py`，其中 `FDMET` 目前作为 `SSDMET` 的子类存在。当前实现重点是先固定对外接口、分片输入和继承关系，而不是立即完成 fragment-local bath 的全部数值流程：
 
-1. `FDMET(mol, ...)` 接收 PySCF `Mole` 对象，并且只保存 molecule 与 AO-index 分片信息，不自动构造或消费全局 SCF reference。
+1. `FDMET(mol, ...)` 接收 PySCF `Mole` 对象，并且只保存 molecule 与原子分片信息，不自动构造或消费全局 SCF reference。
 2. `build()` 进入 fragment bath 路径。该路径目前显式抛出 `NotImplementedError`，避免错误地根据全局 SCF density 构造 `FDMET` bath orbital。
-3. `FDMET` 的 impurity 和 fragments 用 PySCF AO label/pattern 定义；`imp_idx` 的 property 和 setter 直接继承 `SSDMET` 的实现，fragment labels 也通过同一个 PySCF AO label 解析接口转换为 AO index list。
-4. `imp_charge` 和 `fragment_charges` 作为显式输入保存；第 $f$ 个 fragment-local molecule 的总电荷取为 `imp_charge + fragment_charges[f]`。
+3. `FDMET` 的 impurity 和 fragments 按**原子编号**定义：`imp_atoms` 接受原子编号、元素符号或其列表，所有指定原子的基函数自动归入 impurity；`ligand_atoms` 为原子编号列表的列表。内部仍通过 `_atom_ids_to_ao_indices()` 将原子编号转换为 AO index list，以保持与下游 Lowdin 正交化等数值接口的兼容。`imp_idx` property 返回的是 AO index（从 `imp_atoms` 派生），不再直接接受 AO label 输入。
+4. `imp_charge` 和 `ligand_charges` 作为显式输入保存；第 $f$ 个 fragment-local molecule 的总电荷取为 `imp_charge + ligand_charges[f]`。
 5. `fragment_scf`、`threshold` 等参数已经在类中保留，供后续 fragment-local bath builder 对接。
 6. `examples/fragment_dmet.py` 中已经为 `Co(SH)_4` 定义分片：impurity 为 Co，`L1` 到 `L4` 分别是四个 SH ligand fragment，并显式给出 Co 与每个 SH ligand 的电荷。
 
@@ -307,41 +307,35 @@ $$
 1. 对每个 ligand fragment $f$，取全局 AO index 集合 $\mathcal{I}\cup\mathcal{L}_f$，并找到这些 AO 所在的原子。
 2. 用这些原子从母体 `Mole` 复制出一个截断的 `fragment_mol`。坐标使用 Bohr 单位，basis 和 ECP 复用母体 molecule 的解析后数据。
 3. 在 `fragment_mol` 上运行 fragment-local reference。默认路径为 CAHF；也保留 `rohf` 作为调试路径。
-4. 返回 `FragmentReference`，其中保存 `fragment_mol`、局部 `mf`、涉及的全局 atom/AO index，以及全局 AO 到局部 AO 的 impurity/ligand 分块映射。
+4. 返回 `LigandReference`，其中保存 `fragment_mol`、局部 `mf`、涉及的全局 atom/AO index，以及全局 AO 到局部 AO 的 impurity/ligand 分块映射。
 
-当前 CAHF 的默认 active-space 参数为 `ncas=5, nelecas=7`，对应当前 Co d7 示例的最小默认值。更一般体系应通过 `fragment_scf_options` 显式传入。`FDMET` 根据 `imp_charge + fragment_charges[f]` 计算第 $f$ 个 fragment 子体系的总 charge，并把该总 charge 传给底层 `run_fragment_scf()`；如果直接调用 `run_fragment_scf()`，也必须显式传入总 `charge`。没有显式 charge 时直接报错。
+当前 CAHF 的默认 active-space 参数为 `ncas=5, nelecas=7`，对应当前 Co d7 示例的最小默认值。更一般体系应通过 `fragment_scf_options` 显式传入。`FDMET` 根据 `imp_charge + ligand_charges[f]` 计算第 $f$ 个 fragment 子体系的总 charge，并把该总 charge 传给底层 `run_fragment_scf()`；如果直接调用 `run_fragment_scf()`，也必须显式传入总 `charge`。没有显式 charge 时直接报错。
 
 局部 fragment SCF 的输出等级由 `FDMET.build(fragment_scf_verbose=3)` 控制，与外层 `FDMET.verbose` 分开。该参数只属于本次 build 行为，不保存在 `FDMET` 构造器中。
 
-当前 fragment-local CAHF 的单电子 Hamiltonian 只来自截断后的 `impurity + ligand_f` 局部 molecule，即 PySCF 在该 `fragment_mol` 上计算的 `hcore`。其他 ligand fragment 不在该局部 molecule 中，因此它们的核吸引势、电子库仑势、净负电荷静电场以及由此导致的轨道极化目前都没有进入第 `f` 个 fragment CAHF。换言之，`fragment_charges` 当前只决定对应局部 molecule 的电子数，还没有作为 point charge、embedding potential 或全局投影势作用到其他 fragment 的局部参考计算中。
+当前 fragment-local CAHF 的单电子 Hamiltonian 只来自截断后的 `impurity + ligand_f` 局部 molecule，即 PySCF 在该 `fragment_mol` 上计算的 `hcore`。其他 ligand fragment 不在该局部 molecule 中，因此它们的核吸引势、电子库仑势、净负电荷静电场以及由此导致的轨道极化目前都没有进入第 `f` 个 fragment CAHF。换言之，`ligand_charges` 当前只决定对应局部 molecule 的电子数，还没有作为 point charge、embedding potential 或全局投影势作用到其他 fragment 的局部参考计算中。
 
 ### 全局 AO index 与局部 fragment AO index
 
-`FDMET` 的输入分片定义在母体 molecule 的全局 AO basis 中。设母体 molecule 的 AO index 为
+`FDMET` 的输入分片按**原子编号**定义。用户指定 `imp_atoms`（原子编号或元素符号）和 `ligand_atoms`（每个 ligand 的原子编号列表），代码通过 `_atom_ids_to_ao_indices()` 将其转换为全局 AO index。设母体 molecule 的 AO index 为
 
 $$
 \mu = 0,1,\ldots,N_{\mathrm{AO}}-1.
 $$
 
-用户输入的 `imp_idx` 解析为全局 impurity AO 集合
+`imp_atoms` 解析后得到的全局 impurity AO 集合为
 
 $$
 I = \{\mu_I\},
 $$
 
-第 $f$ 个 ligand fragment 解析为全局 ligand AO 集合
+第 $f$ 个 ligand fragment 解析后得到的全局 ligand AO 集合为
 
 $$
 L_f = \{\mu_{L_f}\}.
 $$
 
-构造第 $f$ 个局部 fragment reference 时，代码先形成
-
-$$
-G_f = I \cup L_f,
-$$
-
-并从这些全局 AO index 找到它们所属的母体 atom index。随后用这些 atom 重新构造一个局部 `fragment_mol`。因此局部 molecule 有自己的 atom 编号和 AO 编号：
+构造第 $f$ 个局部 fragment reference 时，代码直接用 `imp_atoms` 和 `ligand_atoms[f]` 的原子编号并集构造局部 `fragment_mol`（不再需要从 AO index 反查原子）。局部 molecule 有自己的 atom 编号和 AO 编号：
 
 $$
 p = 0,1,\ldots,N_{\mathrm{AO}}^{(f)}-1.
@@ -349,14 +343,13 @@ $$
 
 这两个编号系统不是同一个编号系统。全局 AO index $\mu$ 指的是母体 molecule 中的 AO；局部 AO index $p$ 指的是截断后的 `fragment_mol` 中的 AO。
 
-当前 `FragmentReference` 保存以下映射信息：
+当前 `LigandReference` 保存以下映射信息：
 
-1. `atom_ids`：局部 `fragment_mol` 中每个 atom 对应的母体 molecule atom index。若 `atom_ids = [0, 1, 5]`，表示局部 atom 0/1/2 分别来自母体 atom 0/1/5。
-2. `global_idx`：参与该 fragment reference 的母体 AO index，目前按 `list(impurity_idx) + list(fragment_idx)` 保存。
-3. `local_imp_idx`：在局部 `fragment_mol` AO basis 中属于 impurity 的 AO index。
-4. `local_fragment_idx`：在局部 `fragment_mol` AO basis 中属于 ligand fragment 的 AO index。
+1. `fragment_to_parent_idx`：局部 `fragment_mol` 的 AO index 到母体 molecule AO index 的映射。
+2. `fragment_imp_idx`：在局部 `fragment_mol` AO basis 中属于 impurity 的 AO index。
+3. `fragment_lig_idx`：在局部 `fragment_mol` AO basis 中属于 ligand 的 AO index。
 
-映射的构造方式是：对每个被选中的母体 atom，按 PySCF 在该 atom 内生成 AO 的顺序建立对应关系。也就是说，局部 molecule 中某个 atom 的第 $k$ 个 AO，对应母体 molecule 中同一个 atom 的第 $k$ 个 AO。这样避免依赖 AO label 字符串做反查，因为某些壳层或简并 AO 的 label 可能重复或不够唯一。
+映射的构造方式是：对每个被选中的母体 atom，按 `mol.aoslice_by_atom()` 给出的 AO 范围建立对应关系。也就是说，局部 molecule 中某个 atom 的第 $k$ 个 AO，对应母体 molecule 中同一个 atom 的第 $k$ 个 AO。
 
 后续如果要把局部 bath orbital 映射回母体 AO basis，需要使用这个局部到全局 AO 对应关系。设局部 bath orbital 在 `fragment_mol` AO basis 中的系数为
 
@@ -393,17 +386,12 @@ fragment_scf_options={
 ### 关键函数
 
 ```python
-def run_fragment_scf(mol, impurity_idx, fragment_idx, charge, fragment_scf="cahf"):
+def run_fragment_scf(mol, impurity_atoms, ligand_atoms, charge, fragment_scf="cahf"):
     """Run HF/CAHF on one metal-ligand fragment and return density information."""
 ```
 
 ```python
-def build_fragment(mol, impurity_idx, fragment_idx, charge, fragment_scf="cahf", **kwargs):
-    """Build one impurity-ligand fragment Mole and run its local reference."""
-```
-
-```python
-def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=None, threshold=1e-13):
+def bath_from_ligand_density(dm, fragment_imp_idx, ligand_idx, overlap=None, threshold=1e-13):
     """Construct bath orbitals from one fragment density matrix."""
 ```
 
@@ -413,10 +401,10 @@ def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=
 
 1. 对每个 impurity-ligand fragment 先运行 `run_fragment_scf()` 得到局部 reference。
 2. 用 `ssdmet.mf_or_cas_make_rdm1s()` 提取 fragment-local AO density。
-3. 在 `fragment_bath_from_fragment_density()` 中调用模块级 `ssdmet.lowdin_orth(..., preserve_imp=True)`，复用现有固定 impurity 的 Lowdin 正交化实现。
-4. 将局部 density 限制到 `local_imp_idx + local_fragment_idx` 的正交轨道子空间。
+3. 在 `bath_from_ligand_density()` 中调用模块级 `ssdmet.lowdin_orth(..., preserve_imp=True)`，复用现有固定 impurity 的 Lowdin 正交化实现。
+4. 将局部 density 限制到 `fragment_imp_idx + fragment_lig_idx` 的正交轨道子空间。
 5. 只对 fragment/environment density block 做自然轨道分解，按标准 SSDMET 的环境自然占据数阈值规则选出 bath orbitals。
-6. 利用 `FragmentReference.local_to_global_idx` 将局部 AO coefficient 嵌回母体 molecule 的全局 AO basis。
+6. 利用 `LigandReference.fragment_to_parent_idx` 将局部 AO coefficient 嵌回母体 molecule 的全局 AO basis。
 7. 合并所有 fragment bath 后，在母体 AO overlap metric 下投影掉全局固定 impurity 分量，并对 bath block 做 metric orthonormalization。
 8. `FDMET.build()` 现在会设置：
    - `es_orb = [fixed impurity orbitals, merged fragment bath orbitals]`
@@ -438,7 +426,7 @@ def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=
 ```python
 mydmet = fragment.FDMET(
     mol,
-    imp_idx="Co.*",
+    imp_atoms="Co",
     embedded_init_guess="fragment_density",
     embedded_active_aolabels="Co 3d",
     ...
