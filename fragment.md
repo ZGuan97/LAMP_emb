@@ -427,9 +427,39 @@ def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx, overlap=
 
 当前 `fo_orb` 明确为空。这不是临时占位，而是当前默认算法选择：fragment-local occupied orbitals 来自多个重叠的局部子体系，不能直接合并为全局 frozen occupied space，否则容易重复计数电子。当前实现令 `nfo = 0`，embedded electron number 等于全体系电子数。若 `impurity + bath` 轨道数不足以容纳该电子数，代码应直接报错。
 
-当前 `es_occ` 使用 embedded space 内的 Aufbau-like 初猜，占据数只用于构造 embedded CAHF 的初始密度。它不是由全局 reference density 对角化得到的自然占据数。fragment bath 的自然占据数目前只作为诊断信息保留。
+默认 `es_occ` 使用 embedded space 内的 Aufbau-like 初猜，占据数只用于构造 embedded CAHF 的初始密度。它不是由全局 reference density 对角化得到的自然占据数。fragment bath 的自然占据数目前只作为诊断信息保留。
 
 `FDMET.CAHF()` 仿照 `SSDMET.ROHF()` 构造嵌入空间 mean-field 对象。它接收和 `fragment_scf_options` 一致的常用 CAHF/SCF 参数，例如 `ncas`、`nelecas`、`cahf_spin`、`max_cycle`、`level_shift` 和 `diis`。由于嵌入空间没有 PySCF AO labels，若 embedded CAHF 的 RDIIS 参数中提供的是 AO label/pattern 形式的 `rdiis_imp_idx`，当前实现会改用嵌入空间中的 impurity block index。
+
+### Fragment-density embedded CAHF initial guess
+
+`FDMET` 现在支持可选的 fragment-density embedded CAHF 初猜：
+
+```python
+mydmet = fragment.FDMET(
+    mol,
+    imp_idx="Co.*",
+    embedded_init_guess="fragment_density",
+    embedded_active_aolabels="Co 3d",
+    ...
+)
+```
+
+该初猜只改变 embedded CAHF 的初始 `mo_coeff/mo_occ/dm`，不改变 CAHF 方程。算法为：
+
+1. 从每个 fragment-local CAHF reference 提取 AO density。
+2. 将各 fragment density 嵌回母体 AO basis；ligand-fragment 内部 block 和 impurity-ligand cross block 来自对应 fragment，重复的 impurity block 在所有 fragment 之间平均，不同 ligand fragment 之间的 cross block 默认为 0。
+3. 将拼接 density 投影到 embedded basis，并将 trace rescale 到 embedded electron number。
+4. 用 `embedded_active_aolabels` 在固定 impurity block 中选定 active orbitals。CoSH4 当前使用 `Co 3d`，正好对应 5 个 active AO；不要用 `Co.*d` 作为 active label，因为 def2-TZVP 中这会选到多组 d 函数。
+5. 对剩余环境 density block 对角化，按 occupation-like eigenvalue 从大到小排序；前 `ncore = (nelectron - nelecas) // 2` 个作为 core，其余作为 virtual。
+6. 设置 embedded CAHF 初猜：
+
+```text
+mo_coeff = [environment core natural orbitals, fixed active AO, environment virtual natural orbitals]
+mo_occ   = [2, ..., 2, nelecas/ncas, ..., nelecas/ncas, 0, ..., 0]
+```
+
+CoSH4 测试中，`embedded_active_aolabels="Co 3d"` 选择 embedded indices `[18, 19, 20, 21, 22]`。fragment-projected density 的 embedded trace 从 `95.0346402911` rescale 到 `97`，环境 core/virtual 边界为 `core min = 1.12448784038`、`first virtual = 0.379031865686`。embedded CAHF 从该初猜开始的 `init E = -3661.55677969186`，第 73 cycle 收敛到 `E = -3669.30768115344`。相比旧的 `minao` 初猜，该路径避免了从很差的一体初猜开始的大幅能量跳变。
 
 ## 开放问题
 

@@ -78,17 +78,15 @@ def _make_fragment_mol(parent_mol, impurity_idx, fragment_idx, charge=None,
     if len(set(global_idx)) != len(global_idx):
         raise ValueError("impurity and ligand fragment AO indices overlap")
 
-    atom_ids = _atom_ids_from_ao_indices(parent_mol, global_idx)
+    atom_idx = _atom_ids_from_ao_indices(parent_mol, global_idx)
     if spin is None:
         spin = parent_mol.spin
-    if charge is None:
-        raise ValueError("fragment molecule charge must be assigned explicitly")
     if verbose is None:
         verbose = parent_mol.verbose
 
     atom = [
         [parent_mol.atom_symbol(i), parent_mol.atom_coord(i)]
-        for i in atom_ids
+        for i in atom_idx
     ]
     frag_mol = gto.M(
         atom=atom,
@@ -105,13 +103,13 @@ def _make_fragment_mol(parent_mol, impurity_idx, fragment_idx, charge=None,
 
     imp_set = set(impurity_idx)
     frag_set = set(fragment_idx)
-    old_atom_by_new = dict(enumerate(atom_ids))
-    parent_ao_by_atom = {atom_id: [] for atom_id in atom_ids}
+    old_atom_by_new = dict(enumerate(atom_idx))
+    parent_ao_by_atom = {atom_id: [] for atom_id in atom_idx}
     for parent_ao, label in enumerate(parent_mol.ao_labels(fmt=False)):
         atom_id = label[0]
         if atom_id in parent_ao_by_atom:
             parent_ao_by_atom[atom_id].append(parent_ao)
-    local_count_by_atom = {atom_id: 0 for atom_id in atom_ids}
+    local_count_by_atom = {atom_id: 0 for atom_id in atom_idx}
     local_to_global_idx = []
     local_imp_idx = []
     local_fragment_idx = []
@@ -193,22 +191,6 @@ def run_fragment_scf(mol, impurity_idx, fragment_idx, charge,
         local_imp_idx=local_imp_idx,
         local_fragment_idx=local_fragment_idx,
     )
-
-
-def build_fragment(mol, impurity_idx, fragment_idx, charge,
-                   fragment_scf="cahf", fragment_scf_verbose=3, **kwargs):
-    """
-    Build the first-stage impurity-ligand fragment reference.
-
-    The returned object contains the fragment Mole, the converged local SCF
-    object, and index maps between the parent AO basis and the local fragment
-    AO basis.
-    """
-    return run_fragment_scf(mol, impurity_idx, fragment_idx,
-                            charge=charge,
-                            fragment_scf=fragment_scf,
-                            fragment_scf_verbose=fragment_scf_verbose,
-                            **kwargs)
 
 
 def fragment_bath_from_fragment_density(dm, impurity_idx, fragment_idx,
@@ -354,6 +336,47 @@ def _aufbau_occ(nelectron, spin, norb):
     return occ
 
 
+def _fragment_density_to_parent_density(mol, fragment_refs):
+    dm_global = np.zeros((mol.nao, mol.nao))
+    dm_imp_acc = np.zeros((mol.nao, mol.nao))
+    imp_count = np.zeros((mol.nao, mol.nao))
+
+    for frag_ref in fragment_refs:
+        dm = ssdmet.mf_or_cas_make_rdm1s(frag_ref.mf)
+        if dm.ndim == 3:
+            dm = dm[0] + dm[1]
+        l2g = np.asarray(frag_ref.local_to_global_idx, dtype=int)
+        loc_imp = np.asarray(frag_ref.local_imp_idx, dtype=int)
+        loc_frag = np.asarray(frag_ref.local_fragment_idx, dtype=int)
+        glob_imp = l2g[loc_imp]
+        glob_frag = l2g[loc_frag]
+
+        dm_global[np.ix_(glob_frag, glob_frag)] += dm[
+            np.ix_(loc_frag, loc_frag)
+        ]
+        dm_global[np.ix_(glob_imp, glob_frag)] += dm[
+            np.ix_(loc_imp, loc_frag)
+        ]
+        dm_global[np.ix_(glob_frag, glob_imp)] += dm[
+            np.ix_(loc_frag, loc_imp)
+        ]
+        dm_imp_acc[np.ix_(glob_imp, glob_imp)] += dm[
+            np.ix_(loc_imp, loc_imp)
+        ]
+        imp_count[np.ix_(glob_imp, glob_imp)] += 1
+
+    mask = imp_count > 0
+    dm_global[mask] = dm_imp_acc[mask] / imp_count[mask]
+    return (dm_global + dm_global.T.conj()) * 0.5
+
+
+def _rescale_density_trace(dm, nelectron):
+    trace = np.trace(dm).real
+    if abs(trace) < 1e-12:
+        raise ValueError("fragment-projected density has near-zero trace")
+    return dm * (nelectron / trace), trace, nelectron / trace
+
+
 class FDMET(ssdmet.SSDMET):
     """
     Fragment-DMET scaffold.
@@ -372,25 +395,25 @@ class FDMET(ssdmet.SSDMET):
     fragment_charges
         Charge assigned to each ligand fragment.
     """
-    def __init__(self, mol, title='untitled', imp_idx=None,
-                 imp_charge=None, fragments=None, fragment_charges=None,
+    def __init__(self, mol, title='untitled', 
+                 imp_idx=None,imp_charge=None, 
+                 fragments=None, fragment_charges=None,
                  fragment_scf='cahf',
                  fragment_scf_options=None, threshold=1e-13,
                  keep_fv_orbitals=False,
+                 embedded_init_guess='aufbau',
+                 embedded_active_aolabels=None,
                  verbose=logger.INFO):
-        if not isinstance(mol, gto.mole.Mole):
-            raise TypeError("FDMET requires a PySCF Mole object")
-        if imp_idx is None:
-            raise ValueError("FDMET requires impurity AO labels")
-        self.input_obj = mol
-        self.fragments = None
+        
         self.imp_charge = imp_charge
         self.fragment_charges = None
         self.fragment_scf = fragment_scf
         self.fragment_scf_options = (
             {} if fragment_scf_options is None else dict(fragment_scf_options)
         )
-        self.keep_fv_orbitals = keep_fv_orbitals
+        self.keep_fv_orbitals = keep_fv_orbitals # for debug
+        self.embedded_init_guess = embedded_init_guess
+        self.embedded_active_aolabels = embedded_active_aolabels
 
         self.mol = mol
         self.max_mem = getattr(self.mol, 'max_memory', 4000)
@@ -421,6 +444,8 @@ class FDMET(ssdmet.SSDMET):
         self.es_int2e = None
 
         self.es_mf = None
+        self.es_dm = None
+        self.es_init_guess_info = None
         self.fragment_refs = None
         self.fragments = _parse_fragments(self.mol, fragments)
         if self.fragments is not None:
@@ -460,6 +485,9 @@ class FDMET(ssdmet.SSDMET):
         log.info('******** %s ********', self.__class__)
         log.info('fragment scf = %s', self.fragment_scf)
         log.info('fragment scf options = %s', self.fragment_scf_options)
+        log.info('embedded init guess = %s', self.embedded_init_guess)
+        log.info('embedded active AO labels = %s',
+                 self.embedded_active_aolabels)
         log.info('keep frozen virtual orbitals in embedded space = %s',
                  self.keep_fv_orbitals)
         log.info('impurity charge = %s', self.imp_charge)
@@ -471,20 +499,12 @@ class FDMET(ssdmet.SSDMET):
 
     def build(self, fragment_scf_verbose=3, chk_fname_load='', save_chk=False):
         self.dump_flags()
-        if self.fragments is None:
-            raise ValueError(
-                "fragment bath construction requires fragments to be assigned"
-            )
         self.fragment_refs = []
         for ifrag, fragment_idx in enumerate(self.fragments):
             logger.info(self, 'build impurity-ligand fragment %d', ifrag)
             scf_options = dict(self.fragment_scf_options)
-            if self.imp_charge is None or self.fragment_charges is None:
-                raise ValueError(
-                    "imp_charge and fragment_charges must be assigned together"
-                )
             charge = self.imp_charge + self.fragment_charges[ifrag]
-            frag_ref = build_fragment(
+            frag_ref = run_fragment_scf(
                 self.mol, self.imp_idx, fragment_idx,
                 charge=charge,
                 fragment_scf=self.fragment_scf,
@@ -569,7 +589,7 @@ class FDMET(ssdmet.SSDMET):
         logger.info(self, 'energy from frozen occupied orbitals %s',
                     self.fo_ene(e_nuc=False))
         logger.info(self, 'nuclear repulsion energy %s',
-                    self.mf_or_cas.energy_nuc())
+                    self.mol.energy_nuc())
         return self.es_mf
 
     def CAHF(self, run_mf=False, **scf_options):
@@ -578,7 +598,7 @@ class FDMET(ssdmet.SSDMET):
         mol = gto.M()
         mol.verbose = self.verbose
         mol.incore_anyway = True
-        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.nelectron = self.mol.nelectron - 2*self.nfo
         mol.spin = scf_options.pop('spin', self.mol.spin)
 
         ncas = scf_options.pop('ncas', min(self.nes, max(2, mol.nelectron)))
@@ -652,17 +672,106 @@ class FDMET(ssdmet.SSDMET):
                 f"unknown embedded CAHF options: {sorted(scf_options)}"
             )
 
-        es_dm = np.zeros((2, self.nes, self.nes))
-        es_dm[0] = np.diag(np.int32(self.es_occ>1-1e-3))
-        es_dm[1] = np.diag(np.int32(self.es_occ>2-1e-3))
+        mo_coeff, mo_occ, es_dm = self._embedded_cahf_initial_guess(
+            ncas, nelecas, mol.nelectron
+        )
         self.es_dm = es_dm
-        es_mf.mo_coeff = np.eye(self.nes)
-        es_mf.mo_occ = self.es_occ
+        es_mf.mo_coeff = mo_coeff
+        es_mf.mo_occ = mo_occ
+        es_mf.get_init_guess = lambda *args, **kwargs: self.es_dm
+        es_mf.init_guess = self.embedded_init_guess
 
         if run_mf:
-            es_mf.kernel(es_dm)
+            es_mf.kernel(self.es_dm)
             self.es_occ = es_mf.mo_occ
         return es_mf
+
+    def _embedded_cahf_initial_guess(self, ncas, nelecas, nelectron):
+        if self.embedded_init_guess != 'fragment_density':
+            es_dm = np.diag(self.es_occ)
+            self.es_init_guess_info = {'kind': 'aufbau'}
+            return np.eye(self.nes), self.es_occ, es_dm
+
+        if self.embedded_active_aolabels is None:
+            raise ValueError(
+                "embedded_active_aolabels is required for "
+                "embedded_init_guess='fragment_density'"
+            )
+        active_idx = self.search_impurity_ao_label(
+            self.embedded_active_aolabels
+        )
+        if active_idx.size != ncas:
+            raise ValueError(
+                "embedded active AO labels must select exactly ncas orbitals: "
+                f"selected {active_idx.size}, ncas {ncas}"
+            )
+
+        dm_global = _fragment_density_to_parent_density(
+            self.mol, self.fragment_refs
+        )
+        s = self.mol.intor_symmetric('int1e_ovlp')
+        dm_es = self.es_orb.T.conj() @ s @ dm_global @ s @ self.es_orb
+        dm_es = (dm_es + dm_es.T.conj()) * 0.5
+        dm_es, trace_raw, trace_scale = _rescale_density_trace(
+            dm_es, nelectron
+        )
+
+        all_idx = np.arange(self.nes)
+        env_idx = np.setdiff1d(all_idx, active_idx)
+        ncore = (nelectron - nelecas) // 2
+        if 2*ncore + nelecas != nelectron:
+            raise ValueError("embedded CAHF electron count is inconsistent")
+        if ncore > env_idx.size:
+            raise ValueError(
+                "not enough environment orbitals to hold embedded CAHF core"
+            )
+
+        dm_env = dm_es[np.ix_(env_idx, env_idx)]
+        occ_env, orb_env = np.linalg.eigh(dm_env)
+        order = np.argsort(occ_env)[::-1]
+        occ_env = occ_env[order]
+        orb_env = orb_env[:, order]
+
+        env_orb = np.eye(self.nes)[:, env_idx] @ orb_env
+        active_orb = np.eye(self.nes)[:, active_idx]
+        core_orb = env_orb[:, :ncore]
+        vir_orb = env_orb[:, ncore:]
+        mo_coeff = np.hstack((core_orb, active_orb, vir_orb))
+
+        mo_occ = np.zeros(self.nes)
+        mo_occ[:ncore] = 2
+        mo_occ[ncore:ncore+ncas] = nelecas / ncas
+        es_dm = (mo_coeff * mo_occ) @ mo_coeff.T.conj()
+        es_dm = (es_dm + es_dm.T.conj()) * 0.5
+        self.es_occ = mo_occ
+        self.es_init_guess_info = {
+            'kind': 'fragment_density',
+            'active_idx': active_idx.copy(),
+            'trace_raw': trace_raw,
+            'trace_scale': trace_scale,
+            'env_occ': occ_env.copy(),
+            'core_occ_min': occ_env[:ncore].min() if ncore else None,
+            'core_occ_max': occ_env[:ncore].max() if ncore else None,
+            'virtual_occ_max': occ_env[ncore] if ncore < occ_env.size else None,
+        }
+        logger.info(
+            self,
+            'fragment-density embedded guess: raw trace %.12g, scale %.12g',
+            trace_raw, trace_scale
+        )
+        logger.info(
+            self,
+            'fragment-density embedded guess: active %s -> %s',
+            self.embedded_active_aolabels, active_idx.tolist()
+        )
+        if ncore < occ_env.size:
+            logger.info(
+                self,
+                'fragment-density embedded guess: env core min %.12g, '
+                'first virtual %.12g',
+                occ_env[:ncore].min(), occ_env[ncore]
+            )
+        return mo_coeff, mo_occ, es_dm
 
     def density_fit(self, with_df=None):
         raise NotImplementedError(

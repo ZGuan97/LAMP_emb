@@ -54,6 +54,8 @@ mydmet = fragment.FDMET(
     fragment_charges=fragment_charges,
     fragment_scf='cahf',
     keep_fv_orbitals=False,
+    embedded_init_guess='fragment_density',
+    embedded_active_aolabels='Co 3d',
     fragment_scf_options={
         'ncas': 5,
         'nelecas': 7,
@@ -102,16 +104,11 @@ for idx in np.argsort(fv_weight[occ_mask])[-10:][::-1]:
     print('  MO %4d occ %12.8f FV weight %.12e' %
           (mo_idx, mo_occ[mo_idx], fv_weight[mo_idx]))
 
+# ncas, nelec, es_mo = mydmet.avas('Co 3d', threshold=0.5)
+
+es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas=5, nelec=7, statelis=[0,0,0,10])
+es_cas.kernel()
 raise
-
-ncas, nelec, es_mo = mydmet.avas('Co 3d', minao='ccpvtz', threshold=0.5)
-
-
-
-es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas, nelec)
-es_cas.kernel(es_mo)
-
-
 es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
 es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
 total_cas = mydmet.total_cas(es_cas)
