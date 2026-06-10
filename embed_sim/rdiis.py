@@ -23,6 +23,36 @@ class RDIIS(lib.diis.DIIS):
         self.ent = 1.0
         self.ent_conv_tol = 0.1
 
+    @classmethod
+    def setup(cls, options, default_imp_idx, default_mute=False):
+        """Create an RDIIS instance from SCF *options*.
+
+        Consumes ``diis`` and all ``rdiis_`` keys from *options* in-place.
+        The caller resolves impurity indices; *default_imp_idx* is used when
+        ``rdiis_imp_idx`` is not supplied.
+
+        Returns the RDIIS object, or None when DIIS is disabled.
+        """
+        diis = options.pop('diis', 'diis')
+        if not isinstance(diis, str):
+            return None
+        if diis.lower() != 'rdiis':
+            raise ValueError(f"unsupported DIIS method: {diis}")
+
+        obj = cls(
+            imp_idx=options.pop('rdiis_imp_idx', default_imp_idx),
+            rdiis_prop=options.pop('rdiis_prop', 'dS'),
+            power=options.pop('rdiis_power', 0.2),
+            kernel=options.pop('rdiis_kernel', None),
+            mute=options.pop('rdiis_mute', default_mute),
+        )
+        if 'rdiis_ent_conv_tol' in options:
+            obj.ent_conv_tol = options.pop('rdiis_ent_conv_tol')
+        if 'rdiis_space' in options:
+            obj.space = options.pop('rdiis_space')
+
+        return obj
+
     def get_err_vec1(self, s, d, f):
         '''error vector = SDF - FDS + R'''
         sinv = linalg.inv(s)

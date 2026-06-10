@@ -16,7 +16,7 @@ This file defines development rules for AI agents working on this repository.
 | `aodmet.py` | AO-based DMET variant. `AODMET(SSDMET)`, environment-only orthogonalization. |
 | `df.py` | Density-fitting extensions. `DFSSDMET`, `DFAODMET`, `DFNEVPT`, `DFSISO`. |
 | `siso.py` | Spin-orbit coupling. `SISO` class, SOC integrals, Hamiltonian diagonalization, transition properties. |
-| `rdiis.py` | Regularized DIIS convergence accelerator. `RDIIS(lib.diis.DIIS)`. |
+| `rdiis.py` | Regularized DIIS convergence accelerator. `RDIIS(lib.diis.DIIS)` with `setup` classmethod for options-driven configuration. |
 | `myavas.py` | AVAS active space construction (modified from PySCF). |
 | `sacasscf_mixer.py` | SA-CASSCF solver setup with spin-state list and NEVPT2. |
 | `spin_utils.py` | Spin operators, Weyl state counting, ZFS/Zeeman Hamiltonians. |
@@ -64,6 +64,12 @@ This file defines development rules for AI agents working on this repository.
 - **Classes**: `PascalCase` (e.g., `SSDMET`, `FDMET`, `CAHF`, `SISO`, `RDIIS`).
 - **Domain abbreviations**: Use uppercase for well-known acronyms — SSDMET, FDMET, CAHF, AVAS, RDIIS, DMET, SCF, HF, ROHF, CASSCF, NEVPT2, SISO, ZFS.
 - **Short variable names**: Consistent with QC conventions — `dm` (density matrix), `mf` (mean-field object), `mol` (molecule), `es_orb` (embedded space orbitals), `fo_orb`/`fv_orb` (frozen occupied/virtual), `imp_idx` (impurity indices), `ncas`/`nelecas` (active space parameters).
+- **Fragment-DMET naming convention**:
+  - `ligand`: a ligand group (e.g., SH)
+  - `fragment`: impurity + ligand subsystem
+  - `parent`: the parent (full) molecule
+  - Prefix mapping: `local_*` → `fragment_*`, `global_*` → `parent_*`
+  - Key types: `LigandReference` (stores one fragment reference calculation)
 
 ### Imports
 
@@ -116,6 +122,7 @@ This file defines development rules for AI agents working on this repository.
 - Avoid introducing a second implementation of impurity-preserving orthogonalization. Reuse the existing `preserve_imp` path.
 - For CAHF, fragment SCF, density construction, bath construction, and embedded cluster construction, record assumptions and unresolved questions in `fragment.md`.
 - Example coverage can be minimal at first. A single example with one fragment is enough unless more examples are explicitly requested.
+- `build()` uses a single loop per ligand: `_make_fragment_mol` (class method) → `run_fragment_scf` (free function) → `bath_from_ligand_density` → `fragment_orbitals_to_parent_orbitals`. Keep these steps in this order; do not re-introduce separate loops.
 
 ## Testing
 
@@ -135,3 +142,10 @@ This file defines development rules for AI agents working on this repository.
 - Before editing a file, inspect the relevant surrounding code.
 - Avoid broad rewrites or restructuring unless explicitly requested.
 - If existing uncommitted changes affect the task, work with them rather than overwriting them.
+
+## Next Steps
+
+- Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `run_fragment_scf` consumes keys with `pop`.
+- Introduce a `FragmentMolecule` dataclass to encapsulate the four-tuple returned by `_make_fragment_mol` (frag_mol, to_parent, imp_idx, lig_idx), paralleling `LigandReference` which already encapsulates the SCF output. The `build()` loop would then flow as:
+  `FragmentMolecule` → `run_fragment_scf` → `LigandReference` → bath extraction.
+

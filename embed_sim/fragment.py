@@ -183,25 +183,18 @@ def _make_fragment_mol(parent_mol, impurity_atoms, ligand_atoms, charge=None,
     return frag_mol, fragment_to_parent_idx, fragment_imp_idx, fragment_lig_idx
 
 
-def run_fragment_scf(mol, impurity_atoms, ligand_atoms, charge,
+def run_fragment_scf(frag_mol, fragment_imp_idx,
                      fragment_scf="rohf", fragment_scf_verbose=3, **kwargs):
     """
     Run a low-level reference calculation for one impurity-ligand subsystem.
 
     Parameters
     ----------
-    mol : gto.Mole
-        Parent molecule.
-    impurity_atoms : list[int]
-        Parent atom IDs for the impurity.
-    ligand_atoms : list[int]
-        Parent atom IDs for the ligand.
+    frag_mol : gto.Mole
+        Fragment sub-molecule pre-built by _make_fragment_mol.
+    fragment_imp_idx : list[int]
+        AO indices of impurity atoms within the fragment (default for RDIIS).
     """
-    spin = kwargs.pop('spin', None)
-    frag_mol, fragment_to_parent_idx, fragment_imp_idx, fragment_lig_idx = \
-        _make_fragment_mol(mol, impurity_atoms, ligand_atoms, charge=charge,
-                           spin=spin, verbose=fragment_scf_verbose)
-
     fragment_scf = fragment_scf.lower()
     if fragment_scf == "cahf":
         ncas = kwargs.pop('ncas', 5)
@@ -214,44 +207,20 @@ def run_fragment_scf(mol, impurity_atoms, ligand_atoms, charge,
     else:
         raise ValueError(f"unsupported fragment_scf {fragment_scf}")
 
-    mf.max_memory = kwargs.pop('max_memory', mol.max_memory)
+    mf.max_memory = kwargs.pop('max_memory', frag_mol.max_memory)
     mf.max_cycle = kwargs.pop('max_cycle', getattr(mf, 'max_cycle', 50))
     mf.level_shift = kwargs.pop('level_shift', getattr(mf, 'level_shift', 0))
 
-    diis = kwargs.pop('diis', 'diis')
-
-    if isinstance(diis, str):
-        if diis.lower() != 'rdiis':
-            raise ValueError(f"unsupported fragment DIIS {diis}")
-        rdiis_imp_idx = kwargs.pop('rdiis_imp_idx', fragment_imp_idx)
-        rdiis_imp_idx = _resolve_local_ao_indices(
-            frag_mol, rdiis_imp_idx, 'rdiis_imp_idx'
-        )
-        mf.diis = rdiis.RDIIS(
-            rdiis_prop=kwargs.pop('rdiis_prop', 'dS'),
-            imp_idx=rdiis_imp_idx,
-            power=kwargs.pop('rdiis_power', 0.2),
-            kernel=kwargs.pop('rdiis_kernel', None),
-            mute=kwargs.pop(
-                'rdiis_mute', fragment_scf_verbose < logger.INFO
-            ),
-        )
-        if 'rdiis_ent_conv_tol' in kwargs:
-            mf.diis.ent_conv_tol = kwargs.pop('rdiis_ent_conv_tol')
-        if 'rdiis_space' in kwargs:
-            mf.diis.space = kwargs.pop('rdiis_space')
+    rdiis_imp_idx = _resolve_local_ao_indices(
+        frag_mol, kwargs.pop('rdiis_imp_idx', fragment_imp_idx),
+        'rdiis_imp_idx')
+    mf.diis = rdiis.RDIIS.setup(kwargs, rdiis_imp_idx,
+                                fragment_scf_verbose < logger.INFO)
 
     if kwargs:
         raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
     mf.kernel()
-
-    return LigandReference(
-        mol=frag_mol,
-        mf=mf,
-        fragment_to_parent_idx=fragment_to_parent_idx,
-        fragment_imp_idx=fragment_imp_idx,
-        fragment_lig_idx=fragment_lig_idx,
-    )
+    return mf
 
 
 def bath_from_ligand_density(dm, fragment_imp_idx, fragment_lig_idx,
@@ -577,6 +546,12 @@ class FDMET(ssdmet.SSDMET):
         ]
         return np.asarray(embedded_idx, dtype=int) + base
 
+    def _make_fragment_mol(self, ligand_atoms, charge, spin=None,
+                           verbose=None):
+        return _make_fragment_mol(
+            self.mol, self._imp_atoms, ligand_atoms,
+            charge=charge, spin=spin, verbose=verbose)
+
     def dump_flags(self):
         log = logger.new_logger(self, 4)
         log.info('')
@@ -606,35 +581,46 @@ class FDMET(ssdmet.SSDMET):
                 "assigned"
             )
         self.ligand_refs = []
+        bath_blocks = []
+        fo_blocks = []
         for ifrag, lig_atoms in enumerate(self.ligand_atoms):
             logger.info(self, 'build impurity-ligand fragment %d', ifrag)
-            scf_options = dict(self.fragment_scf_options)
+
+            # A. Build fragment sub-molecule
             charge = self.imp_charge + self.ligand_charges[ifrag]
-            lig_ref = run_fragment_scf(
-                self.mol, self._imp_atoms, lig_atoms,
-                charge=charge,
+            frag_mol, to_parent, imp_idx, lig_idx = \
+                self._make_fragment_mol(
+                    lig_atoms, charge=charge, verbose=fragment_scf_verbose)
+
+            # B. Run fragment SCF
+            scf_options = dict(self.fragment_scf_options)
+            mf = run_fragment_scf(
+                frag_mol, imp_idx,
                 fragment_scf=self.fragment_scf,
                 fragment_scf_verbose=fragment_scf_verbose,
                 **scf_options,
             )
-            self.ligand_refs.append(lig_ref)
 
-        bath_blocks = []
-        fo_blocks = []
-        for lig_ref in self.ligand_refs:
+            self.ligand_refs.append(LigandReference(
+                mol=frag_mol, mf=mf,
+                fragment_to_parent_idx=to_parent,
+                fragment_imp_idx=imp_idx,
+                fragment_lig_idx=lig_idx,
+            ))
+
+            # C. Extract bath/fo orbitals from fragment density
             bath_orb, fo_orb, _ = bath_from_ligand_density(
-                ssdmet.mf_or_cas_make_rdm1s(lig_ref.mf),
-                lig_ref.fragment_imp_idx,
-                lig_ref.fragment_lig_idx,
-                mol=lig_ref.mol,
+                ssdmet.mf_or_cas_make_rdm1s(mf),
+                imp_idx, lig_idx,
+                mol=frag_mol,
                 threshold=self.threshold,
             )
+
+            # D. Map to parent AO basis
             bath_blocks.append(fragment_orbitals_to_parent_orbitals(
-                bath_orb, lig_ref.fragment_to_parent_idx, self.mol.nao
-            ))
+                bath_orb, to_parent, self.mol.nao))
             fo_blocks.append(fragment_orbitals_to_parent_orbitals(
-                fo_orb, lig_ref.fragment_to_parent_idx, self.mol.nao
-            ))
+                fo_orb, to_parent, self.mol.nao))
 
         raw_bath = np.hstack(bath_blocks) if bath_blocks else np.zeros((self.mol.nao, 0))
         raw_fo = np.hstack(fo_blocks) if fo_blocks else np.zeros((self.mol.nao, 0))
@@ -714,31 +700,12 @@ class FDMET(ssdmet.SSDMET):
         es_mf.get_ovlp = lambda *args: np.eye(self.nes)
         es_mf._eri = ao2mo.restore(8, self.es_int2e, self.nes)
 
-        diis = scf_options.pop('diis', 'diis')
-        if isinstance(diis, str):
-            if diis.lower() != 'rdiis':
-                raise ValueError(f"unsupported embedded DIIS {diis}")
-            default_imp_idx = list(range(len(self.imp_idx)))
-            rdiis_imp_idx = scf_options.pop(
-                'rdiis_imp_idx', default_imp_idx
-            )
-            rdiis_imp_idx = _resolve_impurity_embedded_indices(
-                self, rdiis_imp_idx, 'rdiis_imp_idx'
-            )
-            es_mf.diis = rdiis.RDIIS(
-                rdiis_prop=scf_options.pop('rdiis_prop', 'dS'),
-                imp_idx=rdiis_imp_idx,
-                power=scf_options.pop('rdiis_power', 0.2),
-                kernel=scf_options.pop('rdiis_kernel', None),
-                mute=scf_options.pop('rdiis_mute',
-                                        self.verbose < logger.INFO),
-            )
-            if 'rdiis_ent_conv_tol' in scf_options:
-                es_mf.diis.ent_conv_tol = scf_options.pop(
-                    'rdiis_ent_conv_tol'
-                )
-            if 'rdiis_space' in scf_options:
-                es_mf.diis.space = scf_options.pop('rdiis_space')
+        default_imp_idx = list(range(len(self.imp_idx)))
+        rdiis_imp_idx = _resolve_impurity_embedded_indices(
+            self, scf_options.pop('rdiis_imp_idx', default_imp_idx),
+            'rdiis_imp_idx')
+        es_mf.diis = rdiis.RDIIS.setup(scf_options, rdiis_imp_idx,
+                                       self.verbose < logger.INFO)
 
         if scf_options:
             raise TypeError(
