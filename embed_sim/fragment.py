@@ -12,13 +12,251 @@ from embed_sim import ssdmet, cahf, rdiis
 
 
 @dataclass
-class LigandReference:
-    """Container for one impurity-ligand fragment reference calculation."""
-    mol: gto.mole.Mole
-    mf: object
+class FragmentMolecule:
+    """A fragment sub-molecule (impurity + one ligand group).
+
+    Encapsulates the truncated molecule, AO-index mappings, and the
+    SCF/CAHF result.  Provides classmethod ``from_parent_mol`` and
+    instance methods ``run_scf``, ``build_bath``, ``orbitals_to_parent``.
+
+    Parameters
+    ----------
+    mol : gto.Mole
+        Fragment molecule.
+    parent_atom_ids : list
+        Mapping from fragment-internal atom index to parent atom ID.
+    fragment_to_parent_idx : list
+        Mapping from fragment AO index to parent AO index.
+    fragment_imp_idx : list
+        AO indices within the fragment belonging to impurity atoms.
+    fragment_lig_idx : list
+        AO indices within the fragment belonging to ligand atoms.
+    charge : int
+        Total charge of the fragment.
+    mf : object, optional
+        SCF/CAHF result.  ``None`` until ``run_scf`` is called.
+    """
+    mol: gto.Mole
+    parent_atom_ids: list
     fragment_to_parent_idx: list
     fragment_imp_idx: list
     fragment_lig_idx: list
+    charge: int
+    mf: object = None
+
+    @classmethod
+    def from_parent_mol(cls, parent_mol, impurity_atoms, ligand_atoms,
+                        charge=None, spin=None, verbose=None):
+        """Build a fragment sub-molecule from parent-molecule atom IDs.
+
+        Parameters
+        ----------
+        parent_mol : gto.Mole
+            Parent molecule.
+        impurity_atoms : list[int]
+            Parent atom IDs for the impurity.
+        ligand_atoms : list[int]
+            Parent atom IDs for the ligand.
+        charge : int, optional
+            Total charge for the fragment molecule.
+        spin : int, optional
+            Spin.  Defaults to ``parent_mol.spin``.
+        verbose : int, optional
+            Verbosity.  Defaults to ``parent_mol.verbose``.
+
+        Returns
+        -------
+        FragmentMolecule
+        """
+        imp_set = set(impurity_atoms)
+        lig_set = set(ligand_atoms)
+        overlap = imp_set & lig_set
+        if overlap:
+            raise ValueError(f"impurity and ligand atoms overlap: {sorted(overlap)}")
+
+        atom_ids = sorted(imp_set | lig_set)
+        if spin is None:
+            spin = parent_mol.spin
+        if verbose is None:
+            verbose = parent_mol.verbose
+
+        atom = [[parent_mol.atom_symbol(i), parent_mol.atom_coord(i)]
+                for i in atom_ids]
+        frag_mol = gto.M(atom=atom, basis=parent_mol._basis,
+                         ecp=parent_mol._ecp, charge=charge,
+                         spin=spin, unit='Bohr', cart=parent_mol.cart,
+                         symmetry=False, verbose=verbose,
+                         max_memory=parent_mol.max_memory)
+
+        # Build fragment-to-parent AO index mapping.
+        parent_aoslice = parent_mol.aoslice_by_atom()
+        frag_aoslice = frag_mol.aoslice_by_atom()
+        frag_to_parent_atom = dict(enumerate(atom_ids))
+
+        fragment_to_parent_idx = []
+        fragment_imp_idx = []
+        fragment_lig_idx = []
+        for frag_atom in range(frag_mol.natm):
+            parent_atom = frag_to_parent_atom[frag_atom]
+            frag_ao_start, frag_ao_end = frag_aoslice[frag_atom, 2], frag_aoslice[frag_atom, 3]
+            parent_ao_start = parent_aoslice[parent_atom, 2]
+            nao_on_atom = frag_ao_end - frag_ao_start
+            for k in range(nao_on_atom):
+                frag_ao = frag_ao_start + k
+                parent_ao = parent_ao_start + k
+                fragment_to_parent_idx.append(parent_ao)
+                if parent_atom in imp_set:
+                    fragment_imp_idx.append(frag_ao)
+                else:
+                    fragment_lig_idx.append(frag_ao)
+
+        return cls(mol=frag_mol,
+                   parent_atom_ids=list(atom_ids),
+                   fragment_to_parent_idx=fragment_to_parent_idx,
+                   fragment_imp_idx=fragment_imp_idx,
+                   fragment_lig_idx=fragment_lig_idx,
+                   charge=charge)
+
+    def run_scf(self, fragment_scf="rohf", verbose=3, **kwargs):
+        """Run fragment SCF/CAHF, stores result in ``self.mf``.
+
+        Parameters
+        ----------
+        fragment_scf : str
+            ``"cahf"`` or ``"rohf"``.
+        verbose : int
+            Verbosity for the fragment SCF output.
+        **kwargs
+            Additional SCF options.
+        """
+        fragment_scf = fragment_scf.lower()
+        if fragment_scf == "cahf":
+            ncas = kwargs.pop('ncas', 5)
+            nelecas = kwargs.pop('nelecas', 7)
+            mf = cahf.CAHF(self.mol, ncas=ncas, nelecas=nelecas,
+                           spin=kwargs.pop('cahf_spin', self.mol.spin)).x2c()
+        elif fragment_scf == "rohf":
+            mf = scf.rohf.ROHF(self.mol).x2c()
+        else:
+            raise ValueError(f"unsupported fragment_scf {fragment_scf}")
+
+        mf.max_memory = kwargs.pop('max_memory', self.mol.max_memory)
+        mf.max_cycle = kwargs.pop('max_cycle', getattr(mf, 'max_cycle', 50))
+        mf.level_shift = kwargs.pop('level_shift', getattr(mf, 'level_shift', 0))
+
+        rdiis_imp_idx = _resolve_indices(
+            kwargs.pop('rdiis_imp_idx', self.fragment_imp_idx), 'rdiis_imp_idx',
+            lambda labels: gto.mole._aolabels2baslst(self.mol, labels, base=0))
+        mf.diis = rdiis.RDIIS.setup(kwargs, rdiis_imp_idx,
+                                    verbose < logger.INFO)
+
+        if kwargs:
+            raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
+        mf.kernel()
+        self.mf = mf
+
+    def build_bath(self, threshold=1e-13):
+        """Construct bath orbitals from the fragment density matrix.
+
+        Follows the impurity-preserving Lowdin + embedded subspace NO
+        path from ``ssdmet.build_embeded_subspace``.
+
+        Parameters
+        ----------
+        threshold : float
+            Occupation-number threshold for classifying environment
+            natural orbitals as bath, frozen-occupied, or frozen-virtual.
+
+        Returns
+        -------
+        bath_orb : ndarray
+            Bath orbital coefficients in fragment AO basis.
+        fo_orb : ndarray
+            Frozen-occupied orbital coefficients in fragment AO basis.
+        fv_orb : ndarray
+            Frozen-virtual orbital coefficients in fragment AO basis.
+        """
+        if self.mf is None:
+            raise RuntimeError("run_scf() must be called before build_bath()")
+
+        dm = ssdmet.mf_or_cas_make_rdm1s(self.mf)
+        if dm.ndim == 3:
+            dm = dm[0] + dm[1]
+
+        imp_idx = list(self.fragment_imp_idx)
+        env_idx = list(self.fragment_lig_idx)
+        fragment_idx = imp_idx + env_idx
+        if len(set(fragment_idx)) != len(fragment_idx):
+            raise ValueError("impurity and ligand AO indices overlap")
+        if max(fragment_idx) >= dm.shape[0] or min(fragment_idx) < 0:
+            raise ValueError("fragment AO index is out of range")
+
+        caolo, cloao = ssdmet.lowdin_orth(
+            self.mol, imp_idx=imp_idx, preserve_imp=True)
+        ldm = reduce(np.dot, (cloao, dm, cloao.conj().T))
+
+        nimp = len(imp_idx)
+        ldm_imp = ldm[imp_idx, :][:, imp_idx]
+        ldm_env = ldm[env_idx, :][:, env_idx]
+        ldm_imp_env = ldm[imp_idx, :][:, env_idx]
+        ldm_env_imp = ldm[env_idx, :][:, imp_idx]
+
+        occ_env, orb_env = np.linalg.eigh(ldm_env)
+        nbath = np.sum((occ_env >= threshold) & (occ_env <= 2 - threshold))
+        nfo = np.sum(occ_env > 2 - threshold)
+        nfv = np.sum(occ_env < threshold)
+
+        fv_idx = np.nonzero(occ_env < threshold)[0]
+        bath_idx = np.nonzero((occ_env >= threshold) & (occ_env <= 2 - threshold))[0]
+        fo_idx = np.nonzero(occ_env > 2 - threshold)[0]
+
+        # Reorder env orbitals: [bath, fo, fv]
+        orb_env = np.hstack((orb_env[:, bath_idx], orb_env[:, fo_idx],
+                             orb_env[:, fv_idx]))
+
+        # Build embedded subspace density (imp + bath block)
+        ldm_es = np.block(
+            [[ldm_imp, ldm_imp_env @ orb_env[:, :nbath]],
+             [orb_env[:, :nbath].T.conj() @ ldm_env_imp,
+              orb_env[:, :nbath].T.conj() @ ldm_env @ orb_env[:, :nbath]]])
+        es_occ, es_nat_orb = np.linalg.eigh(ldm_es)
+        es_occ = es_occ[::-1]
+        es_nat_orb = es_nat_orb[:, ::-1]
+
+        # Full transformation in fragment Lowdin space, rearrange to AO order
+        nfrag = ldm.shape[0]
+        cloes = block_diag(np.eye(nimp), orb_env) @ block_diag(
+            es_nat_orb, np.eye(nfo + nfv))
+        rearrange_idx = np.argsort(np.concatenate((imp_idx, env_idx)))
+        cloes = cloes[rearrange_idx, :]
+
+        # Extract bath/fo/fv from environment part, convert to AO basis
+        bath_orb = caolo[:, env_idx] @ cloes[nimp:, :nbath]
+        fo_orb = caolo[:, env_idx] @ cloes[nimp:, nbath:nbath + nfo]
+        fv_orb = caolo[:, env_idx] @ cloes[nimp:, nbath + nfo:]
+        return bath_orb, fo_orb, fv_orb
+
+    def orbitals_to_parent(self, frag_orb, nao):
+        """Embed fragment orbital coefficients into the parent AO basis.
+
+        Parameters
+        ----------
+        frag_orb : ndarray
+            Orbital coefficients in fragment AO basis, shape
+            ``(n_frag_ao, n_orb)``.
+        nao : int
+            Number of AOs in the parent molecule.
+
+        Returns
+        -------
+        ndarray
+            Orbital coefficients in parent AO basis, shape
+            ``(nao, n_orb)``.
+        """
+        parent_orb = np.zeros((nao, frag_orb.shape[1]), dtype=frag_orb.dtype)
+        for frag_ao, parent_ao in enumerate(self.fragment_to_parent_idx):
+            parent_orb[parent_ao, :] = frag_orb[frag_ao, :]
+        return parent_orb
 
 
 def _resolve_atom_ids(mol, atoms, name):
@@ -74,12 +312,12 @@ def _atom_ids_to_ao_indices(mol, atom_ids):
     return sorted(ao_indices)
 
 
-def _resolve_local_ao_indices(mol, ao_idx, name):
+def _resolve_indices(ao_idx, name, lookup):
+    """Resolve AO labels or AO indices to integer indices via *lookup* callable."""
     if isinstance(ao_idx, str):
-        indices = [int(x) for x in gto.mole._aolabels2baslst(
-            mol, ao_idx, base=0)]
+        indices = list(lookup(ao_idx))
         if len(indices) == 0:
-            raise ValueError(f"{name} must not be empty")
+            raise ValueError(f"{name} does not match any AO labels")
         return indices
     try:
         indices = list(ao_idx)
@@ -87,231 +325,10 @@ def _resolve_local_ao_indices(mol, ao_idx, name):
         raise TypeError(f"{name} must be AO labels or AO indices")
     if all(isinstance(idx, Integral) for idx in indices):
         return [int(idx) for idx in indices]
-    indices = [int(x) for x in gto.mole._aolabels2baslst(
-        mol, ao_idx, base=0)]
+    indices = list(lookup(ao_idx))
     if len(indices) == 0:
-        raise ValueError(f"{name} must not be empty")
+        raise ValueError(f"{name} does not match any AO labels")
     return indices
-
-
-def _resolve_impurity_embedded_indices(obj, ao_idx, name):
-    if isinstance(ao_idx, str):
-        indices = obj.search_impurity_ao_label(ao_idx).tolist()
-        if len(indices) == 0:
-            raise ValueError(f"{name} does not match any impurity AO labels")
-        return indices
-    try:
-        indices = list(ao_idx)
-    except TypeError:
-        raise TypeError(f"{name} must be AO labels or AO indices")
-    if all(isinstance(idx, int) for idx in indices):
-        return indices
-    indices = obj.search_impurity_ao_label(ao_idx).tolist()
-    if len(indices) == 0:
-        raise ValueError(f"{name} does not match any impurity AO labels")
-    return indices
-
-
-def _make_fragment_mol(parent_mol, impurity_atoms, ligand_atoms, charge=None,
-                       spin=None, verbose=None):
-    """Build a fragment sub-molecule from atom IDs.
-
-    Parameters
-    ----------
-    parent_mol : gto.Mole
-        Parent molecule.
-    impurity_atoms : list[int]
-        Parent atom IDs for the impurity.
-    ligand_atoms : list[int]
-        Parent atom IDs for the ligand.
-    """
-    imp_set = set(impurity_atoms)
-    lig_set = set(ligand_atoms)
-    overlap = imp_set & lig_set
-    if overlap:
-        raise ValueError(
-            f"impurity and ligand atoms overlap: {sorted(overlap)}"
-        )
-
-    atom_ids = sorted(imp_set | lig_set)
-    if spin is None:
-        spin = parent_mol.spin
-    if verbose is None:
-        verbose = parent_mol.verbose
-
-    atom = [
-        [parent_mol.atom_symbol(i), parent_mol.atom_coord(i)]
-        for i in atom_ids
-    ]
-    frag_mol = gto.M(
-        atom=atom,
-        basis=parent_mol._basis,
-        ecp=parent_mol._ecp,
-        charge=charge,
-        spin=spin,
-        unit='Bohr',
-        cart=parent_mol.cart,
-        symmetry=False,
-        verbose=verbose,
-        max_memory=parent_mol.max_memory,
-    )
-
-    # Build fragment-to-parent AO index mapping.
-    parent_aoslice = parent_mol.aoslice_by_atom()
-    frag_aoslice = frag_mol.aoslice_by_atom()
-    # Map: fragment atom index -> parent atom ID
-    frag_to_parent_atom = dict(enumerate(atom_ids))
-
-    fragment_to_parent_idx = []
-    fragment_imp_idx = []
-    fragment_lig_idx = []
-    for frag_atom in range(frag_mol.natm):
-        parent_atom = frag_to_parent_atom[frag_atom]
-        frag_ao_start = frag_aoslice[frag_atom, 2]
-        frag_ao_end = frag_aoslice[frag_atom, 3]
-        parent_ao_start = parent_aoslice[parent_atom, 2]
-        nao_on_atom = frag_ao_end - frag_ao_start
-        for k in range(nao_on_atom):
-            frag_ao = frag_ao_start + k
-            parent_ao = parent_ao_start + k
-            fragment_to_parent_idx.append(parent_ao)
-            if parent_atom in imp_set:
-                fragment_imp_idx.append(frag_ao)
-            else:
-                fragment_lig_idx.append(frag_ao)
-
-    return frag_mol, fragment_to_parent_idx, fragment_imp_idx, fragment_lig_idx
-
-
-def run_fragment_scf(frag_mol, fragment_imp_idx,
-                     fragment_scf="rohf", fragment_scf_verbose=3, **kwargs):
-    """
-    Run a low-level reference calculation for one impurity-ligand subsystem.
-
-    Parameters
-    ----------
-    frag_mol : gto.Mole
-        Fragment sub-molecule pre-built by _make_fragment_mol.
-    fragment_imp_idx : list[int]
-        AO indices of impurity atoms within the fragment (default for RDIIS).
-    """
-    fragment_scf = fragment_scf.lower()
-    if fragment_scf == "cahf":
-        ncas = kwargs.pop('ncas', 5)
-        nelecas = kwargs.pop('nelecas', 7)
-        cahf_spin = kwargs.pop('cahf_spin', frag_mol.spin)
-        mf = cahf.CAHF(frag_mol, ncas=ncas, nelecas=nelecas,
-                       spin=cahf_spin).x2c()
-    elif fragment_scf == "rohf":
-        mf = scf.rohf.ROHF(frag_mol).x2c()
-    else:
-        raise ValueError(f"unsupported fragment_scf {fragment_scf}")
-
-    mf.max_memory = kwargs.pop('max_memory', frag_mol.max_memory)
-    mf.max_cycle = kwargs.pop('max_cycle', getattr(mf, 'max_cycle', 50))
-    mf.level_shift = kwargs.pop('level_shift', getattr(mf, 'level_shift', 0))
-
-    rdiis_imp_idx = _resolve_local_ao_indices(
-        frag_mol, kwargs.pop('rdiis_imp_idx', fragment_imp_idx),
-        'rdiis_imp_idx')
-    mf.diis = rdiis.RDIIS.setup(kwargs, rdiis_imp_idx,
-                                fragment_scf_verbose < logger.INFO)
-
-    if kwargs:
-        raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
-    mf.kernel()
-    return mf
-
-
-def bath_from_ligand_density(dm, fragment_imp_idx, fragment_lig_idx,
-                             mol=None, overlap=None,
-                             threshold=1e-13):
-    """
-    Construct bath orbitals from one fragment density matrix.
-
-    Follows the same impurity-preserving Lowdin path and embedded subspace
-    natural-orbital rotation as ``ssdmet.build_embeded_subspace``.  The
-    fragment density is transformed to the Lowdin basis, the environment
-    (ligand) block is diagonalized, and an embedded subspace density is
-    built in the impurity + bath block.  After diagonalization of this
-    embedded subspace density, the full transformation is assembled with
-    ``block_diag`` and rearranged back to the fragment AO ordering.
-    Bath, frozen-occupied and frozen-virtual orbitals are returned in the
-    parent AO basis.
-    """
-    if dm.ndim == 3:
-        dm = dm[0] + dm[1]
-
-    fragment_idx = list(fragment_imp_idx) + list(fragment_lig_idx)
-    if len(set(fragment_idx)) != len(fragment_idx):
-        raise ValueError("impurity and ligand AO indices overlap")
-    if max(fragment_idx) >= dm.shape[0] or min(fragment_idx) < 0:
-        raise ValueError("fragment AO index is out of range")
-
-    caolo, cloao = ssdmet.lowdin_orth(
-        mol, ovlp=overlap, imp_idx=list(fragment_imp_idx),
-        preserve_imp=True
-    )
-    ldm = reduce(np.dot, (cloao, dm, cloao.conj().T))
-
-    # Environment = ligand in fragment space
-    imp_idx = list(fragment_imp_idx)
-    env_idx = list(fragment_lig_idx)
-    nimp = len(imp_idx)
-
-    ldm_imp = ldm[imp_idx, :][:, imp_idx]
-    ldm_env = ldm[env_idx, :][:, env_idx]
-    ldm_imp_env = ldm[imp_idx, :][:, env_idx]
-    ldm_env_imp = ldm[env_idx, :][:, imp_idx]
-
-    occ_env, orb_env = np.linalg.eigh(ldm_env)
-
-    nbath = np.sum((occ_env >= threshold) & (occ_env <= 2 - threshold))
-    nfo = np.sum(occ_env > 2 - threshold)
-    nfv = np.sum(occ_env < threshold)
-
-    fv_idx = np.nonzero(occ_env < threshold)[0]
-    bath_idx = np.nonzero(
-        (occ_env >= threshold) & (occ_env <= 2 - threshold)
-    )[0]
-    fo_idx = np.nonzero(occ_env > 2 - threshold)[0]
-
-    # Reorder env orbitals: [bath, fo, fv]
-    orb_env = np.hstack((orb_env[:, bath_idx], orb_env[:, fo_idx], orb_env[:, fv_idx]))
-
-    # Build embedded subspace density (imp + bath block)
-    ldm_es = np.block([
-        [ldm_imp, ldm_imp_env @ orb_env[:, :nbath]],
-        [orb_env[:, :nbath].T.conj() @ ldm_env_imp,
-         orb_env[:, :nbath].T.conj() @ ldm_env @ orb_env[:, :nbath]]
-    ])
-    es_occ, es_nat_orb = np.linalg.eigh(ldm_es)
-    es_occ = es_occ[::-1]
-    es_nat_orb = es_nat_orb[:, ::-1]
-
-    # Full transformation in fragment Lowdin space
-    nfrag = ldm.shape[0]
-    n_es = nimp + nbath
-    cloes = block_diag(np.eye(nimp), orb_env) @ block_diag(
-        es_nat_orb, np.eye(nfo + nfv)
-    )
-
-    # Rearrange from [imp, env] ordering back to fragment AO ordering
-    rearrange_idx = np.argsort(np.concatenate((imp_idx, env_idx)))
-    cloes = cloes[rearrange_idx, :]
-
-    # Extract bath / fo / fv from environment part, convert to AO basis
-    bath_orb = caolo[:, env_idx] @ cloes[nimp:, :nbath]
-    fo_orb = caolo[:, env_idx] @ cloes[nimp:, nbath:nbath + nfo]
-    fv_orb = caolo[:, env_idx] @ cloes[nimp:, nbath + nfo:]
-    return bath_orb, fo_orb, fv_orb
-
-
-def fragment_orbitals_to_parent_orbitals(frag_orb, fragment_to_parent_idx, nao):
-    parent_orb = np.zeros((nao, frag_orb.shape[1]), dtype=frag_orb.dtype)
-    for frag_ao, parent_ao in enumerate(fragment_to_parent_idx):
-        parent_orb[parent_ao, :] = frag_orb[frag_ao, :]
-    return parent_orb
 
 
 def _complete_global_orbitals(mol, impurity_idx, bath_orb, fo_orb=None,
@@ -358,35 +375,18 @@ def _complete_global_orbitals(mol, impurity_idx, bath_orb, fo_orb=None,
     return c_imp, bath_orb, fo_orb, c_fv
 
 
-# def _aufbau_occ(nelectron, spin, norb):
-#     nalpha = (nelectron + spin) // 2
-#     nbeta = (nelectron - spin) // 2
-#     if nalpha + nbeta != nelectron or nalpha < nbeta:
-#         raise ValueError("inconsistent electron count and spin")
-#     if nalpha > norb:
-#         raise ValueError(
-#             "fragment-DMET without frozen occupied orbitals assigns all "
-#             "electrons to the impurity+bath space, but this space has fewer "
-#             "orbitals than alpha electrons"
-#         )
-#     occ = np.zeros(norb)
-#     occ[:nbeta] = 2
-#     occ[nbeta:nalpha] = 1
-#     return occ
-
-
-def _fragment_density_to_parent_density(mol, ligand_refs):
+def _fragment_density_to_parent_density(mol, fragment_mols):
     dm_parent = np.zeros((mol.nao, mol.nao))
     dm_imp_acc = np.zeros((mol.nao, mol.nao))
     imp_count = np.zeros((mol.nao, mol.nao))
 
-    for lig_ref in ligand_refs:
-        dm = ssdmet.mf_or_cas_make_rdm1s(lig_ref.mf)
+    for frag in fragment_mols:
+        dm = ssdmet.mf_or_cas_make_rdm1s(frag.mf)
         if dm.ndim == 3:
             dm = dm[0] + dm[1]
-        f2p = np.asarray(lig_ref.fragment_to_parent_idx, dtype=int)
-        frag_imp = np.asarray(lig_ref.fragment_imp_idx, dtype=int)
-        frag_lig = np.asarray(lig_ref.fragment_lig_idx, dtype=int)
+        f2p = np.asarray(frag.fragment_to_parent_idx, dtype=int)
+        frag_imp = np.asarray(frag.fragment_imp_idx, dtype=int)
+        frag_lig = np.asarray(frag.fragment_lig_idx, dtype=int)
         parent_imp = f2p[frag_imp]
         parent_lig = f2p[frag_lig]
 
@@ -470,25 +470,6 @@ class FDMET(ssdmet.SSDMET):
         self._build_impurity_label_map()
         self.threshold = threshold
 
-        self.fo_orb = None
-        self.fv_orb = None
-        self.es_orb = None
-        self.es_occ = None
-
-        self.nfo = None
-        self.nfv = None
-        self.nes = None
-        self.nbath = None
-        self.nappended_fo = None
-        self.nkept_fv = None
-
-        self.es_int1e = None
-        self.es_int2e = None
-
-        self.es_mf = None
-        self.es_dm = None
-        self.es_init_guess_info = None
-        self.ligand_refs = None
         self.ligand_atoms = None
         if ligand_atoms is not None:
             self.ligand_atoms = [
@@ -498,9 +479,7 @@ class FDMET(ssdmet.SSDMET):
             if ligand_charges is not None:
                 self.ligand_charges = list(ligand_charges)
                 if len(self.ligand_charges) != len(self.ligand_atoms):
-                    raise ValueError(
-                        "ligand_charges must have the same length as ligand_atoms"
-                    )
+                    raise ValueError("ligand_charges must have the same length as ligand_atoms")
 
     @property
     def imp_atoms(self):
@@ -535,10 +514,7 @@ class FDMET(ssdmet.SSDMET):
         }
 
     def search_impurity_ao_label(self, aolabels, base=0):
-        parent_idx = [
-            int(idx)
-            for idx in gto.mole._aolabels2baslst(self.mol, aolabels, base=0)
-        ]
+        parent_idx = list(gto.mole._aolabels2baslst(self.mol, aolabels, base=0))
         embedded_idx = [
             self.impurity_ao_to_embedded_idx[idx]
             for idx in parent_idx
@@ -546,9 +522,9 @@ class FDMET(ssdmet.SSDMET):
         ]
         return np.asarray(embedded_idx, dtype=int) + base
 
-    def _make_fragment_mol(self, ligand_atoms, charge, spin=None,
+    def make_fragment_mol(self, ligand_atoms, charge, spin=None,
                            verbose=None):
-        return _make_fragment_mol(
+        return FragmentMolecule.from_parent_mol(
             self.mol, self._imp_atoms, ligand_atoms,
             charge=charge, spin=spin, verbose=verbose)
 
@@ -573,54 +549,27 @@ class FDMET(ssdmet.SSDMET):
             log.info('ligand atoms = %s', self.ligand_atoms)
             log.info('ligand charges = %s', self.ligand_charges)
 
-    def build(self, fragment_scf_verbose=3):
+    def build(self, verbose=3):
         self.dump_flags()
         if self.ligand_atoms is None:
-            raise ValueError(
-                "fragment bath construction requires ligand_atoms to be "
-                "assigned"
-            )
-        self.ligand_refs = []
+            raise ValueError("fragment bath construction requires ligand_atoms to be assigned")
+        self.fragment_mols = []
         bath_blocks = []
         fo_blocks = []
         for ifrag, lig_atoms in enumerate(self.ligand_atoms):
             logger.info(self, 'build impurity-ligand fragment %d', ifrag)
 
-            # A. Build fragment sub-molecule
             charge = self.imp_charge + self.ligand_charges[ifrag]
-            frag_mol, to_parent, imp_idx, lig_idx = \
-                self._make_fragment_mol(
-                    lig_atoms, charge=charge, verbose=fragment_scf_verbose)
+            frag = self.make_fragment_mol(lig_atoms, charge=charge, verbose=verbose)
 
-            # B. Run fragment SCF
             scf_options = dict(self.fragment_scf_options)
-            mf = run_fragment_scf(
-                frag_mol, imp_idx,
-                fragment_scf=self.fragment_scf,
-                fragment_scf_verbose=fragment_scf_verbose,
-                **scf_options,
-            )
+            frag.run_scf(fragment_scf=self.fragment_scf, verbose=verbose, **scf_options)
+            self.fragment_mols.append(frag)
 
-            self.ligand_refs.append(LigandReference(
-                mol=frag_mol, mf=mf,
-                fragment_to_parent_idx=to_parent,
-                fragment_imp_idx=imp_idx,
-                fragment_lig_idx=lig_idx,
-            ))
+            bath_orb, fo_orb, _ = frag.build_bath(threshold=self.threshold)
 
-            # C. Extract bath/fo orbitals from fragment density
-            bath_orb, fo_orb, _ = bath_from_ligand_density(
-                ssdmet.mf_or_cas_make_rdm1s(mf),
-                imp_idx, lig_idx,
-                mol=frag_mol,
-                threshold=self.threshold,
-            )
-
-            # D. Map to parent AO basis
-            bath_blocks.append(fragment_orbitals_to_parent_orbitals(
-                bath_orb, to_parent, self.mol.nao))
-            fo_blocks.append(fragment_orbitals_to_parent_orbitals(
-                fo_orb, to_parent, self.mol.nao))
+            bath_blocks.append(frag.orbitals_to_parent(bath_orb, self.mol.nao))
+            fo_blocks.append(frag.orbitals_to_parent(fo_orb, self.mol.nao))
 
         raw_bath = np.hstack(bath_blocks) if bath_blocks else np.zeros((self.mol.nao, 0))
         raw_fo = np.hstack(fo_blocks) if fo_blocks else np.zeros((self.mol.nao, 0))
@@ -651,9 +600,6 @@ class FDMET(ssdmet.SSDMET):
         self.nbath = nbath
         self.nappended_fo = nappended_fo
         self.nkept_fv = nkept_fv
-        # self.es_occ = _aufbau_occ(
-        #     self.mol.nelectron - 2*self.nfo, self.mol.spin, self.nes
-        # )
 
         logger.info(self, 'number of impurity orbitals %d', len(self.imp_idx))
         logger.info(self, 'number of bath orbitals %d', nbath)
@@ -667,10 +613,8 @@ class FDMET(ssdmet.SSDMET):
         self.es_int1e = self.make_es_int1e()
         self.es_int2e = self.make_es_int2e()
         self.es_mf = self.CAHF(**self.fragment_scf_options)
-        logger.info(self, 'energy from frozen occupied orbitals %s',
-                    self.fo_ene(e_nuc=False))
-        logger.info(self, 'nuclear repulsion energy %s',
-                    self.mol.energy_nuc())
+        logger.info(self, 'energy from frozen occupied orbitals %s', self.fo_ene(e_nuc=False))
+        logger.info(self, 'nuclear repulsion energy %s', self.mol.energy_nuc())
         return self.es_mf
 
     def CAHF(self, run_mf=False, **scf_options):
@@ -685,36 +629,24 @@ class FDMET(ssdmet.SSDMET):
         nelecas = scf_options.pop('nelecas')
         cahf_spin = scf_options.pop('cahf_spin', mol.spin)
 
-        es_mf = cahf.CAHF(mol, ncas=ncas, nelecas=nelecas,
-                          spin=cahf_spin).x2c()
+        es_mf = cahf.CAHF(mol, ncas=ncas, nelecas=nelecas, spin=cahf_spin).x2c()
         es_mf.max_memory = scf_options.pop('max_memory', self.max_mem)
-        es_mf.max_cycle = scf_options.pop(
-            'max_cycle', getattr(es_mf, 'max_cycle', 200)
-        )
-        es_mf.level_shift = scf_options.pop(
-            'level_shift', getattr(es_mf, 'level_shift', 0)
-        )
+        es_mf.max_cycle = scf_options.pop('max_cycle', 200)
+        es_mf.level_shift = scf_options.pop('level_shift', 5)
         es_mf.mo_energy = np.zeros((self.nes))
 
         es_mf.get_hcore = lambda *args: self.es_int1e
         es_mf.get_ovlp = lambda *args: np.eye(self.nes)
         es_mf._eri = ao2mo.restore(8, self.es_int2e, self.nes)
 
-        default_imp_idx = list(range(len(self.imp_idx)))
-        rdiis_imp_idx = _resolve_impurity_embedded_indices(
-            self, scf_options.pop('rdiis_imp_idx', default_imp_idx),
-            'rdiis_imp_idx')
-        es_mf.diis = rdiis.RDIIS.setup(scf_options, rdiis_imp_idx,
-                                       self.verbose < logger.INFO)
+        rdiis_imp_idx = _resolve_indices(scf_options.pop('rdiis_imp_idx'), 'rdiis_imp_idx',
+                                         self.search_impurity_ao_label)
+        es_mf.diis = rdiis.RDIIS.setup(scf_options, rdiis_imp_idx, self.verbose < logger.INFO)
 
         if scf_options:
-            raise TypeError(
-                f"unknown embedded CAHF options: {sorted(scf_options)}"
-            )
+            raise TypeError(f"unknown embedded CAHF options: {sorted(scf_options)}")
 
-        mo_coeff, mo_occ, es_dm = self._embedded_cahf_initial_guess(
-            ncas, nelecas, mol.nelectron
-        )
+        mo_coeff, mo_occ, es_dm = self._embedded_cahf_initial_guess(ncas, nelecas, mol.nelectron)
         self.es_dm = es_dm
         es_mf.mo_coeff = mo_coeff
         es_mf.mo_occ = mo_occ
@@ -729,8 +661,6 @@ class FDMET(ssdmet.SSDMET):
     def _embedded_cahf_initial_guess(self, ncas, nelecas, nelectron):
         if self.embedded_init_guess != 'fragment_density':
             es_dm = np.diag(self.es_occ)
-            self.es_init_guess_info = {'kind': 'aufbau'}
-            return np.eye(self.nes), self.es_occ, es_dm
 
         if self.embedded_active_aolabels is None:
             raise ValueError(
@@ -747,7 +677,7 @@ class FDMET(ssdmet.SSDMET):
             )
 
         dm_parent = _fragment_density_to_parent_density(
-            self.mol, self.ligand_refs
+            self.mol, self.fragment_mols
         )
         s = self.mol.intor_symmetric('int1e_ovlp')
         dm_es = self.es_orb.T.conj() @ s @ dm_parent @ s @ self.es_orb

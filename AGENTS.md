@@ -69,7 +69,7 @@ This file defines development rules for AI agents working on this repository.
   - `fragment`: impurity + ligand subsystem
   - `parent`: the parent (full) molecule
   - Prefix mapping: `local_*` → `fragment_*`, `global_*` → `parent_*`
-  - Key types: `LigandReference` (stores one fragment reference calculation)
+  - Key types: `FragmentMolecule` (encapsulates fragment geometry, AO mappings, and SCF result)
 
 ### Imports
 
@@ -145,7 +145,5 @@ This file defines development rules for AI agents working on this repository.
 
 ## Next Steps
 
-- Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `run_fragment_scf` consumes keys with `pop`.
-- Introduce a `FragmentMolecule` dataclass to encapsulate the four-tuple returned by `_make_fragment_mol` (frag_mol, to_parent, imp_idx, lig_idx), paralleling `LigandReference` which already encapsulates the SCF output. The `build()` loop would then flow as:
-  `FragmentMolecule` → `run_fragment_scf` → `LigandReference` → bath extraction.
+- Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `FragmentMolecule.run_scf` consumes keys with `pop`.
 

@@ -31,16 +31,17 @@ impurity = {
     'charge': 2,
 }
 
-ligands = [
-    {'name': 'L1', 'atoms': [1, 5], 'charge': -1},
-    {'name': 'L2', 'atoms': [2, 8], 'charge': -1},
-    {'name': 'L3', 'atoms': [3, 6], 'charge': -1},
-    {'name': 'L4', 'atoms': [4, 7], 'charge': -1},
-]
-
 # ligands = [
-#     {'name': 'L', 'atoms': [1, 5, 2, 8, 3, 6, 4, 7], 'charge': -4},
+#     {'name': 'L1', 'atoms': [1, 5], 'charge': -1},
+#     {'name': 'L2', 'atoms': [2, 8], 'charge': -1},
+#     {'name': 'L3', 'atoms': [3, 6], 'charge': -1},
+#     {'name': 'L4', 'atoms': [4, 7], 'charge': -1},
 # ]
+
+ligands = [
+    {'name': 'L1', 'atoms': [1, 5, 2, 8], 'charge': -2},
+    {'name': 'L2', 'atoms': [3, 6, 4, 7], 'charge': -2},
+]
 
 ligand_atoms = [ligand['atoms'] for ligand in ligands]
 ligand_charges = [ligand['charge'] for ligand in ligands]
@@ -68,7 +69,7 @@ mydmet = fragment.FDMET(
         'level_shift': 4.0,
     },
 )
-mydmet.build(fragment_scf_verbose=3)
+mydmet.build(verbose=3)
 mydmet.es_mf.run()
 
 fv0 = len(mydmet.imp_idx) + mydmet.nbath + mydmet.nappended_fo

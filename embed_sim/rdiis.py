@@ -1,6 +1,8 @@
 # Regularized DIIS technique
 # Reg terms could be bare polarization, dS, ...
 
+import warnings
+
 import numpy as np 
 from pyscf.lib import logger
 from pyscf import scf, lib, gto
@@ -39,8 +41,14 @@ class RDIIS(lib.diis.DIIS):
         if diis.lower() != 'rdiis':
             raise ValueError(f"unsupported DIIS method: {diis}")
 
+        if 'rdiis_imp_idx' in options:
+            imp_idx = options.pop('rdiis_imp_idx')
+        else:
+            warnings.warn(f'rdiis_imp_idx is not set, using default {default_imp_idx}', stacklevel=3)
+            imp_idx = default_imp_idx
+
         obj = cls(
-            imp_idx=options.pop('rdiis_imp_idx', default_imp_idx),
+            imp_idx=imp_idx,
             rdiis_prop=options.pop('rdiis_prop', 'dS'),
             power=options.pop('rdiis_power', 0.2),
             kernel=options.pop('rdiis_kernel', None),
