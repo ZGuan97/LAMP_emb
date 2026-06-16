@@ -33,3 +33,13 @@ mf2 = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c().newton()
 mf2.max_cycle=200
 mf2.conv_tol = 1e-9
 mf2.kernel(mo, occ)
+
+
+# CAHF_SOSCF encapsulates the three-step workflow above into a single call:
+#   pre-SCF → AVAS → CAHF + Newton
+mol2 = get_mol(0)
+mf3 = cahf.CAHF_SOSCF(mol2, ncas=5, nelecas=7, spin=3,
+                      avas_aolabels=['Co 3d'], avas_threshold=0.5,
+                      init_guess='atom', pre_scf_max_cycle=0,
+                      max_cycle=200, conv_tol=1e-9, verbose=4)
+print('CAHF_SOSCF energy = %.12f' % mf3.e_tot)

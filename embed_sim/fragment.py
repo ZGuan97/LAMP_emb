@@ -135,6 +135,30 @@ class FragmentMolecule:
             nelecas = kwargs.pop('nelecas', 7)
             mf = cahf.CAHF(self.mol, ncas=ncas, nelecas=nelecas,
                            spin=kwargs.pop('cahf_spin', self.mol.spin)).x2c()
+        elif fragment_scf == "cahf-soscf":
+            ncas = kwargs.pop('ncas', 5)
+            nelecas = kwargs.pop('nelecas', 7)
+            spin = kwargs.pop('cahf_spin', self.mol.spin)
+            avas_aolabels = kwargs.pop('avas_aolabels')
+            avas_threshold = kwargs.pop('avas_threshold', 0.5)
+            init_guess = kwargs.pop('init_guess', 'atom')
+            pre_scf_max_cycle = kwargs.pop('pre_scf_max_cycle', 0)
+            max_cycle = kwargs.pop('max_cycle', 200)
+            conv_tol = kwargs.pop('conv_tol', 1e-9)
+            level_shift = kwargs.pop('level_shift', 0)
+            kwargs.pop('max_memory', None)
+            # Consume RDIIS keys (SOSCF does not use RDIIS)
+            rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx, True)
+            if kwargs:
+                raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
+            self.mf = cahf.CAHF_SOSCF(
+                self.mol, ncas=ncas, nelecas=nelecas, spin=spin,
+                avas_aolabels=avas_aolabels, avas_threshold=avas_threshold,
+                init_guess=init_guess, pre_scf_max_cycle=pre_scf_max_cycle,
+                max_cycle=max_cycle, conv_tol=conv_tol, level_shift=level_shift,
+                verbose=verbose,
+            )
+            return
         elif fragment_scf == "rohf":
             mf = scf.rohf.ROHF(self.mol).x2c()
         else:
@@ -633,6 +657,7 @@ class FDMET(ssdmet.SSDMET):
         es_mf = cahf.CAHF(mol, ncas=ncas, nelecas=nelecas, spin=cahf_spin).x2c()
         es_mf.max_memory = scf_options.pop('max_memory', self.max_mem)
         es_mf.max_cycle = scf_options.pop('max_cycle', 200)
+        es_mf.conv_tol = scf_options.pop('conv_tol', 1e-9)
         es_mf.level_shift = scf_options.pop('level_shift', 5)
         es_mf.mo_energy = np.zeros((self.nes))
 
@@ -644,6 +669,13 @@ class FDMET(ssdmet.SSDMET):
             scf_options['rdiis_imp_idx'], 'rdiis_imp_idx', self.search_impurity_ao_label)
         es_mf.diis = rdiis.RDIIS.setup(scf_options, scf_options['rdiis_imp_idx'],
                                        self.verbose < logger.INFO)
+
+        newton = scf_options.pop('newton', False)
+        # Discard SOSCF-specific keys (consumed by run_scf in fragment stage)
+        scf_options.pop('avas_aolabels', None)
+        scf_options.pop('avas_threshold', None)
+        scf_options.pop('init_guess', None)
+        scf_options.pop('pre_scf_max_cycle', None)
 
         if scf_options:
             raise TypeError(f"unknown embedded CAHF options: {sorted(scf_options)}")
@@ -659,6 +691,9 @@ class FDMET(ssdmet.SSDMET):
 
         if run_mf:
             es_mf.kernel(self.es_dm)
+            if newton:
+                es_mf = es_mf.newton()
+                es_mf.kernel()
             self.es_occ = es_mf.mo_occ
         return es_mf
 

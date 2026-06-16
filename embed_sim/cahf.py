@@ -429,6 +429,76 @@ class CAHF(scf.rohf.ROHF):
         return vind
 
 
+def CAHF_SOSCF(mol, ncas, nelecas, spin,
+               avas_aolabels, avas_threshold=0.5,
+               init_guess='atom', pre_scf_max_cycle=0,
+               max_cycle=200, conv_tol=1e-9,
+               level_shift=0, verbose=None):
+    """Configuration-averaged HF with second-order SCF (SOSCF).
+
+    Three-step workflow:
+      1. Cheap ROHF pre-SCF for initial density
+      2. AVAS to select active-space orbitals from the pre-SCF density
+      3. CAHF + Newton with AVAS orbitals as initial guess
+
+    Parameters
+    ----------
+    mol : gto.Mole
+        Fragment molecule.
+    ncas : int
+        Number of active orbitals.
+    nelecas : int
+        Number of active electrons.
+    spin : int
+        Total spin (2S).
+    avas_aolabels : str or list of str
+        AO labels for AVAS active-space selection (e.g., ``['Co 3d']``).
+    avas_threshold : float
+        AVAS projector truncation threshold.
+    init_guess : str
+        Initial guess type for the pre-SCF (e.g., ``'atom'``).
+    pre_scf_max_cycle : int
+        Max SCF cycles for the pre-SCF.  0 = init guess only, no iterations.
+    max_cycle : int
+        Max Newton iterations in the CAHF Newton stage.
+    conv_tol : float
+        Convergence tolerance for the CAHF Newton stage.
+    level_shift : float
+        Level shift for the CAHF Newton stage.
+    verbose : int or None
+        Verbosity level.  ``None`` means use ``mol.verbose``.
+
+    Returns
+    -------
+    mf : CAHF
+        Converged CAHF mean-field object.
+    """
+    from embed_sim import myavas
+
+    # Step 1: cheap ROHF pre-SCF
+    pre_mf = scf.rohf.ROHF(mol).x2c()
+    pre_mf.init_guess = init_guess
+    pre_mf.max_cycle = pre_scf_max_cycle
+    if verbose is not None:
+        pre_mf.verbose = verbose
+    pre_mf.kernel()
+
+    # Step 2: AVAS to select active-space orbitals
+    _ncas, _nelec, mo_avas = myavas.avas(
+        pre_mf, avas_aolabels, threshold=avas_threshold)
+    occ_avas = CAHF_get_occ(ncas, nelecas)(pre_mf)
+
+    # Step 3: CAHF + Newton with AVAS initial guess
+    mf = CAHF(mol, ncas=ncas, nelecas=nelecas, spin=spin).x2c().newton()
+    mf.max_cycle = max_cycle
+    mf.conv_tol = conv_tol
+    mf.level_shift = level_shift
+    if verbose is not None:
+        mf.verbose = verbose
+    mf.kernel(mo_avas, occ_avas)
+    return mf
+
+
 if __name__ == '__main__':
     f, coulomb_a, exchange_b, alpha, beta = get_coeffs(ncas=5, nelecas=5, spin=3)
     print(f, coulomb_a, exchange_b)

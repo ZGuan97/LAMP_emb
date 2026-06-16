@@ -53,7 +53,7 @@ mydmet = fragment.FDMET(
     imp_charge=impurity['charge'],
     ligand_atoms=ligand_atoms,
     ligand_charges=ligand_charges,
-    fragment_scf='cahf',
+    fragment_scf='cahf-soscf',
     keep_fv_orbitals=False,
     embedded_init_guess='fragment_density',
     embedded_active_aolabels='Co 3d',
@@ -61,15 +61,20 @@ mydmet = fragment.FDMET(
         'ncas': 5,
         'nelecas': 7,
         'cahf_spin': 1,
+        'init_guess': 'atom',
+        'pre_scf_max_cycle': 0,
+        'avas_aolabels': ['Co 3d'],
+        'avas_threshold': 0.5,
+        'max_cycle': 200,
+        'conv_tol': 1e-9,
+        'level_shift': 4.0,
         'diis': 'rdiis',
         'rdiis_prop': 'dS',
         'rdiis_imp_idx': ['Co.*d'],
         'rdiis_power': 0.2,
-        'max_cycle': 500,
-        'level_shift': 4.0,
     },
 )
-mydmet.build(verbose=3)
+mydmet.build(verbose=4)
 mydmet.es_mf.run()
 
 print('\n=== Rebuilding embedded space from CAHF density ===')
