@@ -144,10 +144,11 @@ class FragmentMolecule:
         mf.max_cycle = kwargs.pop('max_cycle', getattr(mf, 'max_cycle', 50))
         mf.level_shift = kwargs.pop('level_shift', getattr(mf, 'level_shift', 0))
 
-        rdiis_imp_idx = _resolve_indices(
-            kwargs.pop('rdiis_imp_idx', self.fragment_imp_idx), 'rdiis_imp_idx',
-            lambda labels: gto.mole._aolabels2baslst(self.mol, labels, base=0))
-        mf.diis = rdiis.RDIIS.setup(kwargs, rdiis_imp_idx,
+        if 'rdiis_imp_idx' in kwargs:
+            kwargs['rdiis_imp_idx'] = _resolve_indices(
+                kwargs['rdiis_imp_idx'], 'rdiis_imp_idx',
+                lambda labels: gto.mole._aolabels2baslst(self.mol, labels, base=0))
+        mf.diis = rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx,
                                     verbose < logger.INFO)
 
         if kwargs:
@@ -639,9 +640,10 @@ class FDMET(ssdmet.SSDMET):
         es_mf.get_ovlp = lambda *args: np.eye(self.nes)
         es_mf._eri = ao2mo.restore(8, self.es_int2e, self.nes)
 
-        rdiis_imp_idx = _resolve_indices(scf_options.pop('rdiis_imp_idx'), 'rdiis_imp_idx',
-                                         self.search_impurity_ao_label)
-        es_mf.diis = rdiis.RDIIS.setup(scf_options, rdiis_imp_idx, self.verbose < logger.INFO)
+        scf_options['rdiis_imp_idx'] = _resolve_indices(
+            scf_options['rdiis_imp_idx'], 'rdiis_imp_idx', self.search_impurity_ao_label)
+        es_mf.diis = rdiis.RDIIS.setup(scf_options, scf_options['rdiis_imp_idx'],
+                                       self.verbose < logger.INFO)
 
         if scf_options:
             raise TypeError(f"unknown embedded CAHF options: {sorted(scf_options)}")
