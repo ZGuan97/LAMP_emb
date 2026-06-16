@@ -60,7 +60,7 @@ mydmet = fragment.FDMET(
     fragment_scf_options={
         'ncas': 5,
         'nelecas': 7,
-        'cahf_spin': 3,
+        'cahf_spin': 1,
         'diis': 'rdiis',
         'rdiis_prop': 'dS',
         'rdiis_imp_idx': ['Co.*d'],
@@ -72,45 +72,19 @@ mydmet = fragment.FDMET(
 mydmet.build(verbose=3)
 mydmet.es_mf.run()
 
-fv0 = len(mydmet.imp_idx) + mydmet.nbath + mydmet.nappended_fo
-fv1 = fv0 + mydmet.nkept_fv
-mo = mydmet.es_mf.mo_coeff
-mo_occ = mydmet.es_mf.mo_occ
-fv_weight = np.sum(np.abs(mo[fv0:fv1, :])**2, axis=0)
-occ_mask = mo_occ > 1e-8
-ncas = mydmet.fragment_scf_options['ncas']
-nelecas = mydmet.fragment_scf_options['nelecas']
-ncore = (mydmet.es_mf.mol.nelectron - nelecas) // 2
-active_slice = slice(ncore, ncore+ncas)
-dm = mydmet.es_mf.make_rdm1(mo, mo_occ)
-if dm.ndim == 3:
-    dm = dm[0] + dm[1]
+print('\n=== Rebuilding embedded space from CAHF density ===')
+old_nbath = mydmet.nbath
+old_nappended_fo = mydmet.nappended_fo
+old_nes = mydmet.nes
+mydmet.rebuild_from_embedded_density()
+print('nbath:        %d -> %d' % (old_nbath, mydmet.nbath))
+print('nappended_fo: %d -> %d' % (old_nappended_fo, mydmet.nappended_fo))
+print('nes:          %d -> %d' % (old_nes, mydmet.nes))
+mydmet.es_mf.run()
+print('E_rebuilt = %.12f' % mydmet.es_mf.e_tot)
 
-print('\n=== FV projection diagnostic ===')
-print('embedded dimensions: nimp = %d, nbath = %d, nappended_fo = %d, nkept_fv = %d, nes = %d' %
-      (len(mydmet.imp_idx), mydmet.nbath, mydmet.nappended_fo,
-       mydmet.nkept_fv, mydmet.nes))
-print('max MO FV weight = %.12e at MO %d' %
-      (fv_weight.max(), int(np.argmax(fv_weight))))
-print('max occupied/active MO FV weight = %.12e' %
-      fv_weight[occ_mask].max())
-print('sum occupied/active occ-weighted FV weight = %.12e' %
-      np.dot(mo_occ, fv_weight))
-print('sum active MO FV weight = %.12e' %
-      np.sum(fv_weight[active_slice]))
-print('density trace on kept-FV block = %.12e' %
-      np.trace(dm[fv0:fv1, fv0:fv1]).real)
-print('largest 10 occupied/active FV weights:')
-for idx in np.argsort(fv_weight[occ_mask])[-10:][::-1]:
-    mo_idx = np.nonzero(occ_mask)[0][idx]
-    print('  MO %4d occ %12.8f FV weight %.12e' %
-          (mo_idx, mo_occ[mo_idx], fv_weight[mo_idx]))
-
-# ncas, nelec, es_mo = mydmet.avas('Co 3d', threshold=0.5)
-
-es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas=5, nelec=7, statelis=[0,0,0,10])
+es_cas = sacasscf_mixer.sacasscf_mixer(mydmet.es_mf, ncas=5, nelec=7, statelis=[0,40,0,10])
 es_cas.kernel()
-raise
 es_ecorr = sacasscf_mixer.sacasscf_nevpt2(es_cas)
 es_cas.fcisolver.e_states = es_cas.fcisolver.e_states + es_ecorr
 total_cas = mydmet.total_cas(es_cas)

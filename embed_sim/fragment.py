@@ -646,7 +646,9 @@ class FDMET(ssdmet.SSDMET):
         if scf_options:
             raise TypeError(f"unknown embedded CAHF options: {sorted(scf_options)}")
 
-        mo_coeff, mo_occ, es_dm = self._embedded_cahf_initial_guess(ncas, nelecas, mol.nelectron)
+        mo_coeff, mo_occ, es_dm = self._embedded_cahf_initial_guess(
+            ncas, nelecas, mol.nelectron
+        )
         self.es_dm = es_dm
         es_mf.mo_coeff = mo_coeff
         es_mf.mo_occ = mo_occ
@@ -662,20 +664,6 @@ class FDMET(ssdmet.SSDMET):
         if self.embedded_init_guess != 'fragment_density':
             es_dm = np.diag(self.es_occ)
 
-        if self.embedded_active_aolabels is None:
-            raise ValueError(
-                "embedded_active_aolabels is required for "
-                "embedded_init_guess='fragment_density'"
-            )
-        active_idx = self.search_impurity_ao_label(
-            self.embedded_active_aolabels
-        )
-        if active_idx.size != ncas:
-            raise ValueError(
-                "embedded active AO labels must select exactly ncas orbitals: "
-                f"selected {active_idx.size}, ncas {ncas}"
-            )
-
         dm_parent = _fragment_density_to_parent_density(
             self.mol, self.fragment_mols
         )
@@ -685,6 +673,52 @@ class FDMET(ssdmet.SSDMET):
         dm_es, trace_raw, trace_scale = _rescale_density_trace(
             dm_es, nelectron
         )
+        logger.info(
+            self,
+            'fragment-density embedded guess: raw trace %.12g, scale %.12g',
+            trace_raw, trace_scale
+        )
+
+        mo_coeff, mo_occ, es_dm = self._cahf_mo_from_density(
+            dm_es, ncas, nelecas, nelectron
+        )
+        self.es_init_guess_info['kind'] = 'fragment_density'
+        self.es_init_guess_info['trace_raw'] = trace_raw
+        self.es_init_guess_info['trace_scale'] = trace_scale
+        return mo_coeff, mo_occ, es_dm
+
+    def _cahf_mo_from_density(self, dm_es, ncas, nelecas, nelectron):
+        """Construct CAHF mo_coeff, mo_occ, es_dm from an embedded-space density.
+
+        Diagonalizes the environment block of *dm_es* to get natural orbitals,
+        then builds ``[core | active | virtual]`` ordering with CAHF fractional
+        occupations.
+
+        Parameters
+        ----------
+        dm_es : ndarray (nes, nes)
+            Density matrix in the current embedded-space basis.
+        ncas : int
+            Number of active orbitals.
+        nelecas : int
+            Number of active electrons.
+        nelectron : int
+            Total embedded-space electrons.
+
+        Returns
+        -------
+        mo_coeff, mo_occ, es_dm
+        """
+        if self.embedded_active_aolabels is None:
+            raise ValueError("embedded_active_aolabels is required")
+        active_idx = self.search_impurity_ao_label(
+            self.embedded_active_aolabels
+        )
+        if active_idx.size != ncas:
+            raise ValueError(
+                "embedded active AO labels must select exactly ncas orbitals: "
+                f"selected {active_idx.size}, ncas {ncas}"
+            )
 
         all_idx = np.arange(self.nes)
         env_idx = np.setdiff1d(all_idx, active_idx)
@@ -713,12 +747,10 @@ class FDMET(ssdmet.SSDMET):
         mo_occ[ncore:ncore+ncas] = nelecas / ncas
         es_dm = (mo_coeff * mo_occ) @ mo_coeff.T.conj()
         es_dm = (es_dm + es_dm.T.conj()) * 0.5
+
         self.es_occ = mo_occ
         self.es_init_guess_info = {
-            'kind': 'fragment_density',
             'active_idx': active_idx.copy(),
-            'trace_raw': trace_raw,
-            'trace_scale': trace_scale,
             'env_occ': occ_env.copy(),
             'core_occ_min': occ_env[:ncore].min() if ncore else None,
             'core_occ_max': occ_env[:ncore].max() if ncore else None,
@@ -726,22 +758,161 @@ class FDMET(ssdmet.SSDMET):
         }
         logger.info(
             self,
-            'fragment-density embedded guess: raw trace %.12g, scale %.12g',
-            trace_raw, trace_scale
-        )
-        logger.info(
-            self,
-            'fragment-density embedded guess: active %s -> %s',
+            'CAHF guess from density: active %s -> %s',
             self.embedded_active_aolabels, active_idx.tolist()
         )
         if ncore < occ_env.size:
             logger.info(
                 self,
-                'fragment-density embedded guess: env core min %.12g, '
+                'CAHF guess from density: env core min %.12g, '
                 'first virtual %.12g',
                 occ_env[:ncore].min(), occ_env[ncore]
             )
         return mo_coeff, mo_occ, es_dm
+
+    def rebuild_from_embedded_density(self, threshold=None):
+        """Re-select bath orbitals using the converged embedded CAHF density.
+
+        Maps the embedded CAHF density back to parent AO Lowdin basis,
+        decomposes the environment block into natural orbitals, and
+        re-classifies them as bath, frozen-occupied, or frozen-virtual.
+        Rebuilds ``es_orb``, ``es_int1e``, ``es_int2e``, and ``es_mf``.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Occupation-number threshold for classifying environment
+            natural orbitals.  Defaults to ``self.threshold``.
+
+        Returns
+        -------
+        es_mf : CAHF
+            New embedded CAHF object (not converged).
+        """
+        if self.es_mf is None:
+            raise RuntimeError("embedded CAHF must be run before rebuild")
+        if threshold is None:
+            threshold = self.threshold
+
+        mo = self.es_mf.mo_coeff
+        mo_occ = self.es_mf.mo_occ
+        dm_es = (mo * mo_occ) @ mo.T.conj()
+        dm_es = (dm_es + dm_es.T.conj()) * 0.5
+
+        caolo, cloao = ssdmet.lowdin_orth(
+            self.mol, imp_idx=self.imp_idx, preserve_imp=True
+        )
+        U = cloao @ self.es_orb
+        ldm = U @ dm_es @ U.T.conj()
+        # supplement with frozen-occupied density (FV has occ=0, no contribution)
+        if self.fo_orb.shape[1] > 0:
+            fo_ldm = cloao @ self.fo_orb
+            ldm = ldm + fo_ldm @ fo_ldm.T.conj() * 2
+        ldm = (ldm + ldm.T.conj()) * 0.5
+
+        env_idx = [x for x in range(ldm.shape[0]) if x not in self.imp_idx]
+        ldm_env = ldm[env_idx, :][:, env_idx]
+        occ_env, orb_env = np.linalg.eigh(ldm_env)
+
+        bath_idx = np.nonzero(
+            (occ_env >= threshold) & (occ_env <= 2 - threshold))[0]
+        fo_idx = np.nonzero(occ_env > 2 - threshold)[0]
+        nbath = len(bath_idx)
+        nfo_env = len(fo_idx)
+
+        bath_orb = (caolo[:, env_idx] @ orb_env[:, bath_idx]
+                    if nbath > 0 else np.zeros((self.mol.nao, 0)))
+        fo_orb = (caolo[:, env_idx] @ orb_env[:, fo_idx]
+                  if nfo_env > 0 else np.zeros((self.mol.nao, 0)))
+
+        c_imp, bath_orb, self.fo_orb, self.fv_orb = _complete_global_orbitals(
+            self.mol, self.imp_idx, bath_orb, fo_orb=fo_orb,
+            svd_tol=threshold
+        )
+
+        nbath = bath_orb.shape[1]
+        nappended_fo = self.fo_orb.shape[1]
+        if self.keep_fv_orbitals:
+            nkept_fv = self.fv_orb.shape[1]
+        else:
+            nkept_fv = 0
+
+        es_env_blocks = [bath_orb]
+        if self.fo_orb.shape[1] > 0:
+            es_env_blocks.append(self.fo_orb)
+            self.fo_orb = np.zeros((self.mol.nao, 0))
+        if self.keep_fv_orbitals and self.fv_orb.shape[1] > 0:
+            es_env_blocks.append(self.fv_orb)
+            self.fv_orb = np.zeros((self.mol.nao, 0))
+
+        es_env_orb = np.hstack(es_env_blocks)
+        self.es_orb = np.hstack((c_imp, es_env_orb))
+        self.nfo = self.fo_orb.shape[1]
+        self.nfv = self.fv_orb.shape[1]
+        self.nes = self.es_orb.shape[1]
+        self.nbath = nbath
+        self.nappended_fo = nappended_fo
+        self.nkept_fv = nkept_fv
+
+        logger.info(self, 'rebuilding embedded space from CAHF density:')
+        logger.info(self, '  impurity orbitals          %d',
+                    len(self.imp_idx))
+        logger.info(self, '  bath orbitals              %d', nbath)
+        logger.info(self, '  appended FO orbitals       %d',
+                    nappended_fo)
+        if nfo_env > 0:
+            logger.info(self,
+                        '  (env natural occ range of FO: %.12g .. %.12g)',
+                        occ_env[fo_idx].min(), occ_env[fo_idx].max())
+        logger.info(self, '  kept FV orbitals           %d',
+                    nkept_fv)
+        logger.info(self, '  frozen occupied            %d',
+                    self.nfo)
+        logger.info(self, '  frozen virtual             %d',
+                    self.nfv)
+        logger.info(self, '  total embedded orbitals    %d',
+                    self.nes)
+
+        self.es_int1e = self.make_es_int1e()
+        self.es_int2e = self.make_es_int2e()
+
+        # project converged Lowdin density into new embedded basis
+        U_new = cloao @ self.es_orb
+        dm_es_new = U_new.T.conj() @ ldm @ U_new
+        dm_es_new = (dm_es_new + dm_es_new.T.conj()) * 0.5
+
+        self.es_mf = self.CAHF(**self.fragment_scf_options)
+
+        # override initial guess with projected converged density
+        # diagonalize the FULL embedded density (cf. SSDMET build_embeded_subspace),
+        # whose eigenvalues are strictly {2, f, 0}
+        ncas = self.fragment_scf_options['ncas']
+        nelecas = self.fragment_scf_options['nelecas']
+        nelectron = self.mol.nelectron - 2 * self.nfo
+        ncore = (nelectron - nelecas) // 2
+
+        es_occ, es_nat_orb = np.linalg.eigh(dm_es_new)
+        es_occ = es_occ[::-1]
+        es_nat_orb = es_nat_orb[:, ::-1]
+
+        mo_occ = np.zeros(self.nes)
+        mo_occ[:ncore] = 2
+        mo_occ[ncore:ncore + ncas] = nelecas / ncas
+        es_dm = (es_nat_orb * mo_occ) @ es_nat_orb.T.conj()
+        es_dm = (es_dm + es_dm.T.conj()) * 0.5
+
+        self.es_init_guess_info['kind'] = 'rebuild_projected'
+        self.es_init_guess_info['nat_occ'] = es_occ
+        self.es_dm = es_dm
+        self.es_mf.mo_coeff = es_nat_orb
+        self.es_mf.mo_occ = mo_occ
+        self.es_mf.get_init_guess = lambda *args, **kwargs: self.es_dm
+
+        logger.info(self, 'energy from frozen occupied orbitals %s',
+                    self.fo_ene(e_nuc=False))
+        logger.info(self, 'nuclear repulsion energy %s',
+                    self.mol.energy_nuc())
+        return self.es_mf
 
     def density_fit(self, with_df=None):
         raise NotImplementedError(

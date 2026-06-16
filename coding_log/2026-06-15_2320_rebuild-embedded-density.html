@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>rebuild_from_embedded_density 实现 - Coding Log - 2026-06-15 23:20</title>
+  <style>
+    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: #222; }
+    h1 { font-size: 1.5rem; border-bottom: 2px solid #444; padding-bottom: .3rem; }
+    h2 { font-size: 1.15rem; margin-top: 2rem; color: #555; }
+    code { background: #f4f4f4; padding: .1em .3em; border-radius: 3px; font-size: .92em; }
+    pre code { display: block; padding: .8rem; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: left; font-size: .92em; }
+    th { background: #f0f0f0; }
+    time { color: #888; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>rebuild_from_embedded_density 实现与 CAHF-aufbau 方案探索</h1>
+  <p><time datetime="2026-06-15T23:20:00">2026-06-15 23:20</time></p>
+
+  <section>
+    <h2>本次目标</h2>
+    <ol>
+      <li>实现 <code>rebuild_from_embedded_density()</code> 方法：利用 converged embedded CAHF 密度重新选择 bath 轨道，构造最终的 embedded space</li>
+      <li>探索 CAHF-aufbau 初猜方案（方案 B）：用 rebuild 过程中的密度投影构造 Aufbau 初猜替代 fragment_density</li>
+      <li>最终决定保留 fragment_density 初猜，退回 aufbau 方案</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>代码改动</h2>
+
+    <h3>1. rebuild_from_embedded_density 方法</h3>
+    <p>位置：<code>embed_sim/fragment.py</code> FDMET 类，line ~747–856。</p>
+    <p>算法流程：</p>
+    <ol>
+      <li>从 <code>self.es_mf.mo_coeff</code> / <code>mo_occ</code> 构造 embedded 密度矩阵 <code>dm_es</code></li>
+      <li>通过 Lowdin 正交化将 <code>dm_es</code> 变换到 parent AO 空间</li>
+      <li>对角化环境子块（非 impurity），得到 environment natural orbitals</li>
+      <li>按 occupation threshold 分类为 bath / FO / FV</li>
+      <li>调用 <code>_complete_global_orbitals</code> 正交化并补全 FV 空间</li>
+      <li>重建 <code>self.es_orb</code>, <code>self.es_int1e</code>, <code>self.es_int2e</code></li>
+      <li>用 fragment_density 初猜重新构造 <code>self.es_mf</code></li>
+    </ol>
+
+    <h3>2. 示例更新</h3>
+    <p><code>examples/fragment_dmet.py</code>：在第一次 CAHF 收敛后和 CASSCF 之间插入 rebuild 演示：</p>
+    <pre><code>mydmet.rebuild_from_embedded_density()
+print('nbath:        %d -&gt; %d' % (old_nbath, mydmet.nbath))
+print('nappended_fo: %d -&gt; %d' % (old_nappended_fo, mydmet.nappended_fo))
+print('nes:          %d -&gt; %d' % (old_nes, mydmet.nes))
+mydmet.es_mf.run()
+print('E_rebuilt = %.12f' % mydmet.es_mf.e_tot)</code></pre>
+
+    <h3>3. CAHF-aufbau 初猜探索（已回退）</h3>
+    <p>尝试了三种 CAHF-aufbau 初猜方案：</p>
+    <ul>
+      <li><strong>Diagonal aufbau</strong>：从 <code>dm_proj</code> 对角化取 natural orbitals 构造 mo_coeff。结果：init E = -1801（很差）</li>
+      <li><strong>Full dm_proj + natural orbital decomposition</strong>：完整 dm_proj 作为 es_dm，但 natural orbital 分解打乱了 active 轨道位置。结果：SCF 梯度极大（|g|=71.1）</li>
+      <li><strong>Hybrid</strong>：full dm_proj 作 es_dm + 环境子空间正交化（<code>P_env @ dm_proj @ P_env</code>）保持 active 轨道在正确位置。结果：init E = -3595.5，SCF 收敛但比 fragment_density 的 -3661.7 差</li>
+    </ul>
+    <p>最终退回原来的 fragment_density 初猜方案，删除了 <code>_cahf_aufbau_initial_guess</code> 方法及相关标志位。</p>
+  </section>
+
+  <section>
+    <h3>文件变更汇总</h3>
+    <table>
+      <tr><th>文件</th><th>变更</th></tr>
+      <tr><td><code>embed_sim/fragment.py</code></td><td>新增 <code>rebuild_from_embedded_density</code> 方法（~110 行）</td></tr>
+      <tr><td><code>examples/fragment_dmet.py</code></td><td>新增 rebuild 演示代码（~12 行）</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>设计选择</h2>
+    <ul>
+      <li>rebuild 沿用 SSDMET 的 Lowdin + environment density diagonalization 框架，与 <code>build_embeded_subspace</code> 逻辑一致</li>
+      <li>CAHF 初猜保持 <code>fragment_density</code> 方案：利用两个 fragment 的独立 SCF 解构造密度，比从单一 embedded 密度投影的 aufbau 初猜能量更好（init E -3661.7 vs -3595.5）</li>
+      <li>rebuild 后直接复用 <code>fragment_scf_options</code>（包括 RDIIS 配置），不引入新的选项</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>验证</h2>
+<pre><code>python -m py_compile embed_sim/fragment.py        # passed
+PYTHONPATH=. /opt/anaconda3/envs/pyscf/bin/python examples/fragment_dmet.py</code></pre>
+    <p>Rebuild 前：nbath=64, nappended_fo=0, nes=109, E_cahf=-3669.20559479572</p>
+    <p>Rebuild 后：nbath=47, nappended_fo=3, nes=95, E_cahf=-3669.205594（一致）</p>
+    <p>CASSCF + NEVPT2 + SISO 完整运行通过，exit code 0。</p>
+  </section>
+</main>
+</body>
+</html>

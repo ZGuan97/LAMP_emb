@@ -466,6 +466,16 @@ mo_occ   = [2, ..., 2, nelecas/ncas, ..., nelecas/ncas, 0, ..., 0]
 
 CoSH4 测试中，`embedded_active_aolabels="Co 3d"` 选择 embedded indices `[18, 19, 20, 21, 22]`。fragment-projected density 的 embedded trace 从 `95.0346402911` rescale 到 `97`，环境 core/virtual 边界为 `core min = 1.12448784038`、`first virtual = 0.379031865686`。embedded CAHF 从该初猜开始的 `init E = -3661.55677969186`，第 73 cycle 收敛到 `E = -3669.30768115344`。相比旧的 `minao` 初猜，该路径避免了从很差的一体初猜开始的大幅能量跳变。
 
+### Rebuild 初猜改进
+
+`rebuild_from_embedded_density()` 现在使用收敛的 embedded CAHF density 构造新 CAHF 的初猜，而不再重复使用 fragment SCF density。流程：
+
+1. 将旧 embedded CAHF 收敛 density 变换到 Lowdin basis（`ldm`，复用已有的环境分解计算）。
+2. 重建 `es_orb` 后，将 `ldm` 投影到新 embedded basis：`dm_es_new = (cloao @ new_es_orb)^T @ ldm @ (cloao @ new_es_orb)`。
+3. 用 `_cahf_mo_from_density()` 对角化环境 block、构造 CAHF 风格的 `[core, active, vir]` mo_coeff/mo_occ。
+
+`_cahf_mo_from_density()` 是从原 `_embedded_cahf_initial_guess` 中提取的公共 MO 构造逻辑，接受任意 embedded-space density 作为输入。`_embedded_cahf_initial_guess` 现在只做 fragment density 拼接和 trace rescale，然后委托给 `_cahf_mo_from_density`。
+
 ### FragmentMolecule 类重构
 
 将原有的 `LigandReference`（仅含 `mol`, `mf`, `fragment_to_parent_idx`, `fragment_imp_idx`, `fragment_lig_idx` 五个字段）吸收合并为 `FragmentMolecule`。新类封装了 fragment 的全部信息以及核心操作：

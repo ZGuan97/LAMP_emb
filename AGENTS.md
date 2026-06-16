@@ -122,7 +122,7 @@ This file defines development rules for AI agents working on this repository.
 - Avoid introducing a second implementation of impurity-preserving orthogonalization. Reuse the existing `preserve_imp` path.
 - For CAHF, fragment SCF, density construction, bath construction, and embedded cluster construction, record assumptions and unresolved questions in `fragment.md`.
 - Example coverage can be minimal at first. A single example with one fragment is enough unless more examples are explicitly requested.
-- `build()` uses a single loop per ligand: `_make_fragment_mol` (class method) → `run_fragment_scf` (free function) → `bath_from_ligand_density` → `fragment_orbitals_to_parent_orbitals`. Keep these steps in this order; do not re-introduce separate loops.
+- `build()` uses a single loop per ligand: `make_fragment_mol` → `frag.run_scf` → `frag.build_bath` → `frag.orbitals_to_parent`. All steps are `FragmentMolecule` methods.
 
 ## Testing
 
