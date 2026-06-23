@@ -32,6 +32,7 @@ This file defines development rules for AI agents working on this repository.
 ### Design Documents
 
 - `fragment.md` contains algorithm derivations for fragment bath construction (in Chinese). Keep it synchronized with `fragment.py` changes.
+- `fragment-doc.html` is the user-facing HTML documentation covering the full Fragment-DMET API: `FragmentMolecule` class, `FDMET` class, build workflow, embedded CAHF, rebuild, helper functions, downstream interfaces, usage examples, and a computation flowchart. Open in a browser to view.
 
 ## General Rules
 
@@ -115,7 +116,8 @@ This file defines development rules for AI agents working on this repository.
 
 ## Fragment Bath Development
 
-- Keep `fragment.md` synchronized with implementation changes related to fragment-based bath orbital construction.
+- Keep `fragment.md` and `fragment-doc.html` synchronized with implementation changes related to fragment-based bath orbital construction.
+- `fragment-doc.html` is the canonical user-facing reference for FDMET API and workflow; update it when public interfaces, build stages, or `fragment_scf_options` parameters change.
 - Document algorithmic changes in `fragment.md` with detailed formula derivations when possible.
 - In the code or implementation-record section of `fragment.md`, summarize the current code changes at a high level only. Do not make this section overly detailed.
 - When implementing fragment bath logic, clearly state which basis each quantity lives in.
@@ -146,4 +148,5 @@ This file defines development rules for AI agents working on this repository.
 ## Next Steps
 
 - Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `FragmentMolecule.run_scf` consumes keys with `pop`.
+- **Fragment two-electron integral optimization**: One advantage of the fragment-based DMET approach is that it avoids global two-electron integral transformation — each fragment only needs its own local two-electron integrals. This optimization has not yet been implemented; the current code still transforms the full-molecule two-electron integrals globally.
 

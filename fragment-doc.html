@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Fragment-DMET 功能文档</title>
+  <style>
+    .math-display { text-align: center; margin: 1rem 0; font-size: 1.05em; }
+    :root { --accent: #2563eb; --bg: #fff; --border: #e2e8f0; --muted: #64748b; }
+    * { box-sizing: border-box; }
+    body { max-width: 56rem; margin: 0 auto; padding: 2rem 1.5rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.7; color: #1e293b; }
+    h1 { font-size: 1.8rem; margin-bottom: .2rem; color: #0f172a; }
+    .subtitle { color: var(--muted); font-size: .95rem; margin-bottom: 2rem; }
+    h2 { font-size: 1.3rem; margin-top: 2.5rem; padding-bottom: .3rem; border-bottom: 2px solid var(--accent); color: var(--accent); }
+    h3 { font-size: 1.05rem; margin-top: 1.8rem; color: #334155; }
+    h4 { font-size: .95rem; margin-top: 1.2rem; color: #475569; }
+    code { background: #f1f5f9; padding: .1em .35em; border-radius: 4px; font-size: .88em; font-family: "SF Mono", "Fira Code", monospace; }
+    pre code { display: block; padding: 1rem; overflow-x: auto; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92em; }
+    th, td { border: 1px solid var(--border); padding: .45rem .65rem; text-align: left; }
+    th { background: #f8fafc; font-weight: 600; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; margin: 1.5rem 0 2rem; }
+    nav h2 { border: none; padding: 0; margin: 0 0 .5rem; font-size: 1rem; color: #334155; }
+    nav ul { margin: 0; padding-left: 1.2rem; columns: 2; column-gap: 2rem; }
+    nav li { margin: .2rem 0; }
+    .note { background: #fffbeb; border-left: 4px solid #f59e0b; padding: .6rem .9rem; margin: 1rem 0; font-size: .93em; border-radius: 0 6px 6px 0; }
+    .note strong { color: #92400e; }
+    .badge { display: inline-block; background: var(--accent); color: #fff; font-size: .72em; padding: .15em .5em; border-radius: 3px; vertical-align: middle; margin-left: .3em; }
+    .math { font-style: italic; }
+    dl dt { font-weight: 600; margin-top: .8rem; }
+    dl dd { margin-left: 1.5rem; margin-bottom: .3rem; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  </style>
+  <script>
+    window.MathJax = { tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] } };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+</head>
+<body>
+<main>
+  <h1>Fragment-DMET 功能文档</h1>
+  <p class="subtitle"><code>embed_sim/fragment.py</code> — 基于分子片段的 DMET bath orbital 构造</p>
+
+  <nav>
+    <h2>目录</h2>
+    <ul>
+      <li><a href="#overview">概述与动机</a></li>
+      <li><a href="#concepts">核心概念</a></li>
+      <li><a href="#class-hierarchy">类层级</a></li>
+      <li><a href="#fragment-molecule">FragmentMolecule</a></li>
+      <li><a href="#fdmet">FDMET 类</a></li>
+      <li><a href="#build-workflow">Build 流程</a></li>
+      <li><a href="#flowchart">计算流程图</a></li>
+      <li><a href="#embedded-cahf">Embedded CAHF</a></li>
+      <li><a href="#rebuild">Rebuild</a></li>
+      <li><a href="#helpers">辅助函数</a></li>
+      <li><a href="#usage">典型用法</a></li>
+      <li><a href="#downstream">下游接口</a></li>
+      <li><a href="#limitations">已知限制</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============================================================ -->
+  <section id="overview">
+    <h2>概述与动机</h2>
+    <p>
+      标准 DMET 的 bath orbital 构造依赖全局 HF/CASSCF 参考波函数。对于过渡金属和镧系配合物（特别是单离子磁体），
+      全局 SCF 在大配体、大基组或低对称性体系下可能成为计算瓶颈。
+    </p>
+    <p>
+      Fragment-DMET 利用体系的化学分片结构，将全局 SCF 替换为一系列更小的 <strong>fragment-local SCF/CAHF</strong> 计算。
+      每个 fragment 由中心金属离子（impurity）和一个配体片段（ligand）组成。从每个 fragment 的局部密度矩阵中提取
+      bath orbitals，再合并为最终 embedded cluster space。
+    </p>
+    <p>该方法的物理假设：</p>
+    <ol>
+      <li>中心离子与每个配体片段的主要纠缠可通过对应的 center-ligand 局部子体系捕捉</li>
+      <li>配体间通过中心离子的间接耦合可在最终 embedded Hamiltonian 中部分恢复</li>
+      <li>CAHF 参考能提供比普通 HF 更稳定、更对称的局部平均场</li>
+    </ol>
+    <p>
+      算法推导和公式详见 <a href="fragment.md"><code>fragment.md</code></a>。
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="concepts">
+    <h2>核心概念</h2>
+
+    <h3>空间划分</h3>
+    <p>全体系 AO 轨道空间划分为 impurity 和 environment：</p>
+    <p class="math-display">\[ \mathcal{A} = \mathcal{I} \oplus \mathcal{E}, \quad \mathcal{E} = \bigoplus_f \mathcal{L}_f \]</p>
+    <p>
+      每个 fragment 的局部计算空间为 \(\mathcal{A}_f = \mathcal{I} \oplus \mathcal{L}_f\)。
+    </p>
+
+    <h3>命名约定</h3>
+    <table>
+      <tr><th>前缀</th><th>含义</th><th>示例</th></tr>
+      <tr><td><code>fragment_</code></td><td>fragment 局部（原 <code>local_</code>）</td><td><code>fragment_imp_idx</code></td></tr>
+      <tr><td><code>parent_</code></td><td>母体分子（原 <code>global_</code>）</td><td><code>parent_atom_ids</code></td></tr>
+      <tr><td><code>es_</code></td><td>embedded space</td><td><code>es_orb</code>, <code>es_int1e</code></td></tr>
+      <tr><td><code>fo_</code> / <code>fv_</code></td><td>frozen occupied / frozen virtual</td><td><code>fo_orb</code>, <code>nfv</code></td></tr>
+      <tr><td><code>imp_</code></td><td>impurity</td><td><code>imp_atoms</code>, <code>imp_idx</code></td></tr>
+    </table>
+
+    <h3>固定 Impurity 正交化</h3>
+    <p>
+      不同 fragment 的 Lowdin 正交化会产生不同的 impurity 空间，破坏 bath 合并时的一致性。
+      FDMET 使用 <code>ssdmet.lowdin_orth(preserve_imp=True)</code>，确保所有 fragment 共享同一个 impurity 定义：
+      impurity block 通过 QR 固定，environment block 投影掉 impurity 分量后做 SVD 正交化。
+    </p>
+
+    <h3>Fragment 电荷</h3>
+    <p>
+      第 \(f\) 个 fragment 的总电荷 = <code>imp_charge + ligand_charges[f]</code>。
+      当前 <code>ligand_charges</code> 只决定局部子分子的电子数，
+      未作为 point charge 或 embedding potential 作用于其他 fragment。
+      静电势可通过 <a href="https://xtb-docs.readthedocs.io/">xTB</a>（GFN-xTB）计算后作为 embedding potential 引入。
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="class-hierarchy">
+    <h2>类层级</h2>
+    <pre><code>pyscf.lib.StreamObject
+  └── SSDMET                  (embed_sim/ssdmet.py)
+        └── FDMET             (embed_sim/fragment.py)
+
+FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</code></pre>
+    <p>
+      <code>FDMET</code> 覆写 <code>build()</code> 和 <code>dump_flags()</code>，
+      新增 <code>CAHF()</code>（替代 <code>ROHF()</code>）、<code>rebuild_from_embedded_density()</code>、
+      <code>_embedded_cahf_initial_guess()</code>、<code>_cahf_mo_from_density()</code>。
+      <code>make_es_int1e()</code>、<code>make_es_int2e()</code>、<code>total_cas()</code>、
+      <code>fo_ene()</code>、<code>save_chk()</code>/<code>load_chk()</code> 等继承自 <code>SSDMET</code>。
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="fragment-molecule">
+    <h2>FragmentMolecule</h2>
+    <p><code>@dataclass</code>，封装一个 fragment 子分子的几何、AO 映射和 SCF 结果。</p>
+
+    <h3>字段</h3>
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>mol</code></td><td><code>gto.Mole</code></td><td>截断后的 fragment 子分子</td></tr>
+      <tr><td><code>parent_atom_ids</code></td><td><code>list[int]</code></td><td>fragment 内部原子序号 → 母体原子 ID</td></tr>
+      <tr><td><code>fragment_to_parent_idx</code></td><td><code>list[int]</code></td><td>fragment AO index → 母体 AO index</td></tr>
+      <tr><td><code>fragment_imp_idx</code></td><td><code>list[int]</code></td><td>fragment AO 中属于 impurity 的索引</td></tr>
+      <tr><td><code>fragment_lig_idx</code></td><td><code>list[int]</code></td><td>fragment AO 中属于 ligand 的索引</td></tr>
+      <tr><td><code>charge</code></td><td><code>int</code></td><td>fragment 总电荷</td></tr>
+      <tr><td><code>mf</code></td><td><code>object | None</code></td><td>SCF/CAHF 结果（构建时为 None）</td></tr>
+    </table>
+
+    <h3>方法</h3>
+
+    <h4><code>from_parent_mol(parent_mol, impurity_atoms, ligand_atoms, charge=None, spin=None, verbose=None)</code></h4>
+    <p><strong>classmethod</strong> 工厂。从母体分子构建 fragment 子分子：</p>
+    <ol>
+      <li>取 impurity + ligand 原子并集，验证无重叠</li>
+      <li>构建截断 <code>gto.Mole</code>（复用母体 basis/ECP/坐标）</li>
+      <li>通过 <code>aoslice_by_atom()</code> 建立 fragment AO → parent AO 的完整映射</li>
+      <li>返回 <code>FragmentMolecule</code>（<code>mf=None</code>）</li>
+    </ol>
+
+    <h4><code>run_scf(fragment_scf="rohf", verbose=3, **kwargs)</code></h4>
+    <p>运行 fragment SCF/CAHF，结果存入 <code>self.mf</code>。</p>
+    <table>
+      <tr><th><code>fragment_scf</code></th><th>实现</th><th>说明</th></tr>
+      <tr><td><code>"cahf"</code></td><td><code>CAHF(mol, ncas, nelecas, spin).x2c()</code></td><td>标准 CAHF，支持 RDIIS</td></tr>
+      <tr><td><code>"cahf-soscf"</code></td><td><code>CAHF_SOSCF(mol, ...)</code></td><td>CAHF + AVAS + SOSCF 二阶收敛</td></tr>
+      <tr><td><code>"rohf"</code></td><td><code>ROHF(mol).x2c()</code></td><td>标准 ROHF，调试路径</td></tr>
+    </table>
+    <p>通用选项：<code>max_memory</code>、<code>max_cycle</code>、<code>level_shift</code>。</p>
+    <p>RDIIS 选项：<code>diis="rdiis"</code>、<code>rdiis_prop</code>、<code>rdiis_imp_idx</code>（在局部 fragment 中解析 AO label）、<code>rdiis_power</code>。</p>
+
+    <h4><code>build_bath(threshold=1e-13)</code></h4>
+    <p>从 fragment 密度矩阵构造 bath / fo / fv 轨道。流程：</p>
+    <ol>
+      <li>提取 fragment-local AO density（<code>ssdmet.mf_or_cas_make_rdm1s</code>）</li>
+      <li>固定 impurity 的 Lowdin 正交化</li>
+      <li>对角化环境密度矩阵 \(\rho_{LL}\)，按自然占据数阈值分类：bath（\(n_{\mathrm{th}} \le n_f \le 2 - n_{\mathrm{th}}\)）、frozen-occupied（\(n_f > 2 - n_{\mathrm{th}}\)）、frozen-virtual（\(n_f < n_{\mathrm{th}}\)）</li>
+      <li>构造 embedded subspace density（imp + bath block），做自然轨道分解</li>
+      <li>返回 <code>(bath_orb, fo_orb, fv_orb)</code>，均为 fragment AO basis 中的系数矩阵</li>
+    </ol>
+
+    <h4><code>orbitals_to_parent(frag_orb, nao)</code></h4>
+    <p>将 fragment AO 轨道系数嵌入到母体 AO basis，非 fragment 位置填零。返回 shape <code>(nao, n_orb)</code>。</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="fdmet">
+    <h2>FDMET 类</h2>
+    <p><code>FDMET(SSDMET)</code> — Fragment-DMET 主入口。</p>
+
+    <h3>构造参数</h3>
+    <pre><code>FDMET(mol, title='untitled',
+      imp_atoms=None, imp_charge=None,
+      ligand_atoms=None, ligand_charges=None,
+      fragment_scf='cahf',
+      fragment_scf_options=None,
+      threshold=1e-13,
+      keep_fv_orbitals=False,
+      embedded_init_guess='aufbau',
+      embedded_active_aolabels=None,
+      verbose=logger.INFO)</code></pre>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>mol</code></td><td><code>gto.Mole</code></td><td>母体分子</td></tr>
+      <tr><td><code>imp_atoms</code></td><td><code>int | str | list</code></td><td>Impurity 原子（编号、元素符号或列表）</td></tr>
+      <tr><td><code>imp_charge</code></td><td><code>int</code></td><td>Impurity 电荷</td></tr>
+      <tr><td><code>ligand_atoms</code></td><td><code>list[list[int]]</code></td><td>每个 ligand fragment 的原子编号列表</td></tr>
+      <tr><td><code>ligand_charges</code></td><td><code>list[int]</code></td><td>每个 ligand 的电荷（与 <code>ligand_atoms</code> 等长）</td></tr>
+      <tr><td><code>fragment_scf</code></td><td><code>str</code></td><td>Fragment SCF 类型</td></tr>
+      <tr><td><code>fragment_scf_options</code></td><td><code>dict</code></td><td>Fragment SCF 参数（ncas, nelecas, cahf_spin, RDIIS 等）</td></tr>
+      <tr><td><code>threshold</code></td><td><code>float</code></td><td>环境自然占据数分类阈值（默认 1e-13）</td></tr>
+      <tr><td><code>keep_fv_orbitals</code></td><td><code>bool</code></td><td>是否将 frozen virtual 保留在 embedded space</td></tr>
+      <tr><td><code>embedded_init_guess</code></td><td><code>str</code></td><td>Embedded CAHF 初猜：<code>"aufbau"</code> 或 <code>"fragment_density"</code></td></tr>
+      <tr><td><code>embedded_active_aolabels</code></td><td><code>str | list</code></td><td>Embedded CAHF active 轨道 AO label（如 <code>"Co 3d"</code>）</td></tr>
+    </table>
+
+    <h3>属性</h3>
+    <dl>
+      <dt><code>imp_atoms</code> <span class="badge">property</span></dt>
+      <dd>Impurity 原子 ID 列表。setter 自动更新 <code>imp_idx</code>。</dd>
+      <dt><code>imp_idx</code> <span class="badge">property</span></dt>
+      <dd>Impurity AO index 列表，从 <code>imp_atoms</code> 派生。</dd>
+      <dt><code>fragment_mols</code></dt>
+      <dd>所有 <code>FragmentMolecule</code> 实例（build 后赋值）。</dd>
+    </dl>
+
+    <h3>Build 输出属性</h3>
+    <table>
+      <tr><th>属性</th><th>类型</th><th>含义</th></tr>
+      <tr><td><code>es_orb</code></td><td><code>ndarray (nao, nes)</code></td><td>Embedded space 轨道系数（母体 AO basis）</td></tr>
+      <tr><td><code>fo_orb</code></td><td><code>ndarray (nao, nfo)</code></td><td>Frozen occupied 轨道（当前默认为空）</td></tr>
+      <tr><td><code>fv_orb</code></td><td><code>ndarray (nao, nfv)</code></td><td>Frozen virtual 轨道</td></tr>
+      <tr><td><code>es_int1e</code></td><td><code>ndarray (nes, nes)</code></td><td>Embedded 一体积分</td></tr>
+      <tr><td><code>es_int2e</code></td><td><code>ndarray</code></td><td>Embedded 二体积分</td></tr>
+      <tr><td><code>es_mf</code></td><td><code>CAHF</code></td><td>Embedded CAHF mean-field 对象</td></tr>
+      <tr><td><code>nbath</code></td><td><code>int</code></td><td>Bath orbital 数</td></tr>
+      <tr><td><code>nfo</code></td><td><code>int</code></td><td>Frozen occupied 数（当前为 0）</td></tr>
+      <tr><td><code>nfv</code></td><td><code>int</code></td><td>Frozen virtual 数</td></tr>
+      <tr><td><code>nes</code></td><td><code>int</code></td><td>Embedded space 总轨道数</td></tr>
+      <tr><td><code>nappended_fo</code></td><td><code>int</code></td><td>追加到 embedded space 的 FO 数</td></tr>
+      <tr><td><code>nkept_fv</code></td><td><code>int</code></td><td>保留在 embedded space 的 FV 数</td></tr>
+    </table>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="build-workflow">
+    <h2>Build 流程</h2>
+    <p><code>FDMET.build(verbose=3)</code> 是主入口，执行以下三个阶段：</p>
+
+    <h3>阶段一：Fragment 循环</h3>
+    <p>对每个 ligand fragment \(f\)：</p>
+    <ol>
+      <li><code>make_fragment_mol()</code> → <code>FragmentMolecule.from_parent_mol()</code></li>
+      <li><code>frag.run_scf(fragment_scf, **scf_options)</code></li>
+      <li><code>frag.build_bath(threshold)</code></li>
+      <li><code>frag.orbitals_to_parent(bath_orb, nao)</code> 和 <code>orbitals_to_parent(fo_orb, nao)</code></li>
+    </ol>
+
+    <h3>阶段二：全局合并</h3>
+    <ol>
+      <li>拼接所有 fragment bath → <code>raw_bath</code>，拼接 fo → <code>raw_fo</code></li>
+      <li><code>_complete_global_orbitals(mol, imp_idx, raw_bath, raw_fo, svd_tol)</code>：
+        在固定 impurity 的全局 Lowdin 基下做 QR 正交化 + 秩筛选 + null space 补全</li>
+      <li>构造 <code>es_orb = [c_imp, bath_orb, (fo appended), (fv kept)]</code></li>
+    </ol>
+    <div class="note">
+      <strong>当前 FO 策略：</strong>默认不构造全局 frozen occupied（<code>fo_orb = []</code>，<code>nfo = 0</code>）。
+      Fragment-local FO 来自多个重叠子体系，不能直接合并。embedded electron number = 全体系电子数。
+      若 impurity + bath 轨道数不足，代码直接报错。
+    </div>
+
+    <h3>阶段三：嵌入空间 Hamiltonian</h3>
+    <ol>
+      <li><code>make_es_int1e()</code>：投影 one-electron integrals + FO HF 贡献</li>
+      <li><code>make_es_int2e()</code>：投影 two-electron integrals</li>
+      <li><code>CAHF()</code>：构造 embedded CAHF 对象</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="flowchart">
+    <h2>计算流程图</h2>
+    <p>以下流程图展示 <code>FDMET.build()</code> 的完整计算流程，包括 rebuild 步骤：</p>
+
+    <svg viewBox="-25 0 825 885" xmlns="http://www.w3.org/2000/svg"
+         style="max-width:800px;width:100%;display:block;margin:1.5rem auto;">
+      <defs>
+        <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0,8 3,0 6" fill="#64748b"/>
+        </marker>
+        <marker id="ah-loop" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0,8 3,0 6" fill="#059669"/>
+        </marker>
+        <marker id="ah-opt" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0,8 3,0 6" fill="#94a3b8"/>
+        </marker>
+      </defs>
+
+      <!-- ====== Phase 1: Fragment 循环 ====== -->
+      <rect x="50" y="15" width="700" height="325" rx="8"
+            fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+      <rect x="50" y="15" width="700" height="34" rx="8" fill="#059669"/>
+      <rect x="50" y="37" width="700" height="12" fill="#059669"/>
+      <text x="70" y="38" fill="#fff" font-size="14" font-weight="600"
+            font-family="system-ui,sans-serif">阶段一：Fragment 循环</text>
+      <text x="72" y="73" fill="#64748b" font-size="12"
+            font-family="system-ui,sans-serif">对每个 ligand fragment f 执行以下步骤：</text>
+
+      <!-- Step 1 -->
+      <text x="75" y="103" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">1.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">FragmentMolecule.from_parent_mol()</tspan>
+        <tspan fill="#64748b"> — 构造截断子分子</tspan>
+      </text>
+      <text x="200" y="123" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ frag_mol</text>
+
+      <!-- Step 2 -->
+      <text x="75" y="163" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">2.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.run_scf()</tspan>
+        <tspan fill="#64748b"> — 运行 fragment-local CAHF/SCF</tspan>
+      </text>
+      <text x="200" y="183" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ mf (density)</text>
+
+      <!-- Step 3 -->
+      <text x="75" y="223" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">3.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.build_bath()</tspan>
+        <tspan fill="#64748b"> — 从 fragment 密度构造 bath/fo/fv 轨道</tspan>
+      </text>
+      <text x="200" y="243" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ bath_orb, fo_orb, fv_orb</text>
+
+      <!-- Step 4 -->
+      <text x="75" y="283" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">4.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.orbitals_to_parent()</tspan>
+        <tspan fill="#64748b"> — 轨道系数映射回母体 AO basis</tspan>
+      </text>
+
+      <!-- Step arrows -->
+      <line x1="65" y1="108" x2="65" y2="148" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
+      <line x1="65" y1="168" x2="65" y2="208" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
+      <line x1="65" y1="228" x2="65" y2="268" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- Phase 1 → Phase 2 -->
+      <line x1="400" y1="345" x2="400" y2="393" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- ====== Phase 2: 全局合并 ====== -->
+      <rect x="50" y="400" width="700" height="225" rx="8"
+            fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+      <rect x="50" y="400" width="700" height="34" rx="8" fill="#2563eb"/>
+      <rect x="50" y="422" width="700" height="12" fill="#2563eb"/>
+      <text x="70" y="423" fill="#fff" font-size="14" font-weight="600"
+            font-family="system-ui,sans-serif">阶段二：全局合并</text>
+
+      <!-- Step 1 -->
+      <text x="75" y="460" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">1.</tspan>
+        <tspan fill="#475569">拼接所有 fragment bath</tspan>
+        <tspan fill="#64748b"> → </tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">raw_bath</tspan>
+        <tspan fill="#64748b">，拼接 fo → </tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">raw_fo</tspan>
+      </text>
+
+      <!-- Step 2 -->
+      <text x="75" y="520" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">2.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">_complete_global_orbitals()</tspan>
+      </text>
+      <text x="95" y="540" fill="#64748b" font-size="12"
+            font-family="system-ui,sans-serif">固定 impurity Lowdin 基下：QR 正交化 + 秩筛选 + null space 补全</text>
+
+      <!-- Step 3 -->
+      <text x="75" y="580" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">3.</tspan>
+        <tspan fill="#475569">构造</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">es_orb</tspan>
+        <tspan fill="#64748b">、</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">fo_orb</tspan>
+        <tspan fill="#64748b">、</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">fv_orb</tspan>
+      </text>
+
+      <!-- Step arrows -->
+      <line x1="65" y1="468" x2="65" y2="508" stroke="#93c5fd" stroke-width="1.5" marker-end="url(#ah)"/>
+      <line x1="65" y1="548" x2="65" y2="565" stroke="#93c5fd" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- Phase 2 → Phase 3 -->
+      <line x1="400" y1="630" x2="400" y2="673" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- ====== Phase 3: 嵌入空间 Hamiltonian ====== -->
+      <rect x="50" y="680" width="700" height="195" rx="8"
+            fill="#f5f3ff" stroke="#c4b5fd" stroke-width="1.5"/>
+      <rect x="50" y="680" width="700" height="34" rx="8" fill="#7c3aed"/>
+      <rect x="50" y="702" width="700" height="12" fill="#7c3aed"/>
+      <text x="70" y="703" fill="#fff" font-size="14" font-weight="600"
+            font-family="system-ui,sans-serif">阶段三：嵌入空间 Hamiltonian</text>
+
+      <!-- Step 1 -->
+      <text x="75" y="740" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">1.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">make_es_int1e()</tspan>
+        <tspan fill="#64748b"> — 投影单电子积分 + FO HF 贡献</tspan>
+      </text>
+      <text x="200" y="758" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ es_int1e</text>
+
+      <!-- Step 2 -->
+      <text x="75" y="790" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">2.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">make_es_int2e()</tspan>
+        <tspan fill="#64748b"> — 投影双电子积分</tspan>
+      </text>
+      <text x="200" y="808" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ es_int2e</text>
+
+      <!-- Step 3 -->
+      <text x="75" y="845" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">3.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">CAHF()</tspan>
+        <tspan fill="#64748b"> — 构造 embedded CAHF 对象并运行</tspan>
+      </text>
+      <text x="200" y="863" fill="#94a3b8" font-size="10" font-style="italic"
+            font-family="system-ui,sans-serif">→ es_mf (converged)</text>
+
+      <!-- Step arrows -->
+      <line x1="65" y1="745" x2="65" y2="778" stroke="#c4b5fd" stroke-width="1.5" marker-end="url(#ah)"/>
+      <line x1="65" y1="813" x2="65" y2="830" stroke="#c4b5fd" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- ====== Loop Arrow (Phase 2 → Phase 1) ====== -->
+      <path d="M 755,625 L 755,120 Q 755,90 725,90 L 758,90"
+            fill="none" stroke="#059669" stroke-width="1.5"
+            stroke-dasharray="6,3" marker-end="url(#ah-loop)"/>
+      <text x="675" y="82" fill="#059669" font-size="11"
+            font-family="system-ui,sans-serif">下一个 fragment</text>
+
+      <!-- ====== Rebuild Arrow (Phase 3 → Phase 1) ====== -->
+      <path d="M 30,870 L 30,860 L -12,860 L -12,120 Q -12,80 28,80 L 42,80"
+            fill="none" stroke="#94a3b8" stroke-width="1.5"
+            stroke-dasharray="4,3" marker-end="url(#ah-opt)"/>
+      <text x="8" y="855" fill="#94a3b8" font-size="11"
+            font-family="system-ui,sans-serif">rebuild</text>
+    </svg>
+
+    <p style="text-align:center; color:var(--muted); font-size:.88em; margin-top:-.5rem;">
+      <span style="color:#059669;">■</span> 阶段一：Fragment 循环&emsp;
+      <span style="color:#2563eb;">■</span> 阶段二：全局合并&emsp;
+      <span style="color:#7c3aed;">■</span> 阶段三：嵌入空间 Hamiltonian&emsp;
+      <span style="color:#94a3b8;">┈</span> rebuild
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="embedded-cahf">
+    <h2>Embedded CAHF</h2>
+    <p><code>FDMET.CAHF(**scf_options)</code> 构造嵌入空间的 mean-field 对象：</p>
+    <ul>
+      <li>创建 mock <code>gto.M()</code>，电子数 = 全体系电子数 − 2 × nfo</li>
+      <li>覆写 <code>get_hcore → es_int1e</code>，<code>get_ovlp → I</code>，<code>_eri → es_int2e</code></li>
+      <li>使用 <code>CAHF</code>（fractional occupation Roothaan equations）而非 ROHF</li>
+      <li>RDIIS 的 <code>rdiis_imp_idx</code> 通过 <code>search_impurity_ao_label()</code> 映射为 embedded space index</li>
+    </ul>
+
+    <h3>初猜选项</h3>
+
+    <h4><code>embedded_init_guess='aufbau'</code>（默认）</h4>
+    <p>使用 <code>es_occ</code>（来自 embedded subspace 自然轨道分解）直接构造对角密度。与 SSDMET 行为一致。</p>
+
+    <h4><code>embedded_init_guess='fragment_density'</code></h4>
+    <p>从 fragment SCF density 构造更物理的初猜：</p>
+    <ol>
+      <li>各 fragment CAHF 提取 AO density，通过 <code>_fragment_density_to_parent_density()</code> 嵌回母体 basis</li>
+      <li>ligand block 和 imp-lig cross block 直接使用，imp block 在 fragment 间平均</li>
+      <li>投影到 embedded basis，trace rescale 到 embedded 电子数</li>
+      <li>用 <code>embedded_active_aolabels</code> 选定 active orbitals（如 <code>"Co 3d"</code> → 5 个 active AO）</li>
+      <li>环境 block 对角化 → 按占据数降序 → 前 <code>ncore</code> 个作 core，其余作 virtual</li>
+      <li>构造 <code>mo_coeff = [core, active, vir]</code>，<code>mo_occ = [2,…,2, nelecas/ncas,…, 0,…,0]</code></li>
+    </ol>
+    <div class="note">
+      <strong>注意：</strong><code>embedded_active_aolabels</code> 应精确选择 <code>ncas</code> 个 AO。
+      例如 CoSH4 使用 <code>"Co 3d"</code>（5 个轨道），不要用 <code>"Co.*d"</code>（def2-TZVP 中会选到多组 d 函数）。
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="rebuild">
+    <h2>Rebuild：从收敛密度重建嵌入空间</h2>
+    <p><code>FDMET.rebuild_from_embedded_density(threshold=None)</code> 在 embedded CAHF 收敛后调用：</p>
+    <ol>
+      <li>将收敛 embedded CAHF density 变换到全局 Lowdin basis</li>
+      <li>补充 frozen-occupied 密度（<code>fo_ldm @ fo_ldm.T × 2</code>）</li>
+      <li>在环境 block 做自然轨道分解，按阈值分类 bath / fo / fv</li>
+      <li><code>_complete_global_orbitals()</code> 正交化</li>
+      <li>重建 <code>es_orb</code>、<code>es_int1e</code>、<code>es_int2e</code></li>
+      <li>将收敛 Lowdin density 投影到新 embedded basis 作为新 CAHF 初猜</li>
+      <li>返回新的 <code>es_mf</code>（未收敛）</li>
+    </ol>
+    <p>
+      Rebuild 可改善 bath orbital 质量：初始 bath 来自 fragment-local density，
+      rebuild 后的 bath 来自收敛的 embedded CAHF density，更好地反映全局纠缠结构。
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="helpers">
+    <h2>辅助函数</h2>
+    <table>
+      <tr><th>函数</th><th>说明</th></tr>
+      <tr>
+        <td><code>_resolve_atom_ids(mol, atoms, name)</code></td>
+        <td>将 <code>int</code> / <code>str</code> / <code>list</code> 原子规范解析为排序的 atom ID 列表。支持元素符号匹配</td>
+      </tr>
+      <tr>
+        <td><code>_atom_ids_to_ao_indices(mol, atom_ids)</code></td>
+        <td>原子 ID → 对应的全局 AO index 列表</td>
+      </tr>
+      <tr>
+        <td><code>_resolve_indices(ao_idx, name, lookup)</code></td>
+        <td>AO label 或 AO index → int index，通过 <code>lookup</code> callable 区分 parent / embedded 查表</td>
+      </tr>
+      <tr>
+        <td><code>_complete_global_orbitals(mol, impurity_idx, bath_orb, fo_orb, svd_tol)</code></td>
+        <td>在固定 impurity 的全局 Lowdin 基下：对 fo 做 QR + 秩筛选 → bath 投影掉 fo 后 QR → null space 补全 fv。
+          返回 <code>(c_imp, bath_orb, fo_orb, fv_orb)</code></td>
+      </tr>
+      <tr>
+        <td><code>_fragment_density_to_parent_density(mol, fragment_mols)</code></td>
+        <td>将各 fragment density 嵌回母体 AO basis。imp block 在 fragment 间平均，lig block 和 cross block 直接拼接</td>
+      </tr>
+      <tr>
+        <td><code>_rescale_density_trace(dm, nelectron)</code></td>
+        <td>将 density matrix trace 缩放到目标电子数</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="usage">
+    <h2>典型用法</h2>
+    <pre><code>from pyscf import gto
+from embed_sim import fragment, sacasscf_mixer, siso
+
+mol = gto.M(atom='Co; S 1 2.30; ...', basis='def2tzvp',
+            spin=3, charge=-2, verbose=4)
+
+# ── 1. 定义 FDMET ──
+mydmet = fragment.FDMET(
+    mol,
+    imp_atoms="Co",
+    imp_charge=2,
+    ligand_atoms=[[1, 5], [2, 6]],      # 两个 ligand fragment
+    ligand_charges=[-1, -1],
+    fragment_scf='cahf',
+    embedded_init_guess='fragment_density',
+    embedded_active_aolabels='Co 3d',
+    fragment_scf_options={
+        'ncas': 5, 'nelecas': 7, 'cahf_spin': 1,
+        'max_cycle': 200, 'conv_tol': 1e-9, 'level_shift': 4.0,
+        'diis': 'rdiis', 'rdiis_prop': 'dS',
+        'rdiis_imp_idx': ['Co.*d'], 'rdiis_power': 0.2,
+    },
+)
+
+# ── 2. Build: fragment SCF → bath → merge → Hamiltonian ──
+mydmet.build(verbose=4)
+
+# ── 3. Embedded CAHF ──
+mydmet.es_mf.run()
+
+# ── 4. Rebuild from converged density ──
+mydmet.rebuild_from_embedded_density()
+mydmet.es_mf.run()
+
+# ── 5. Post-DMET: SA-CASSCF + NEVPT2 + SISO ──
+es_cas = sacasscf_mixer.sacasscf_mixer(
+    mydmet.es_mf, ncas=5, nelec=7, statelis=[0,40,0,10])
+es_cas.kernel()
+total_cas = mydmet.total_cas(es_cas)
+mysiso = siso.SISO('CoSH4', total_cas)
+mysiso.kernel()</code></pre>
+
+    <h3>fragment_scf_options 参数参考</h3>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>ncas</code></td><td><code>int</code></td><td>CAHF active space 轨道数（默认 5）</td></tr>
+      <tr><td><code>nelecas</code></td><td><code>int</code></td><td>CAHF active space 电子数（默认 7）</td></tr>
+      <tr><td><code>cahf_spin</code></td><td><code>int</code></td><td>CAHF spin 参数</td></tr>
+      <tr><td><code>max_cycle</code></td><td><code>int</code></td><td>SCF 最大迭代数</td></tr>
+      <tr><td><code>conv_tol</code></td><td><code>float</code></td><td>SCF 收敛阈值</td></tr>
+      <tr><td><code>level_shift</code></td><td><code>float</code></td><td>Level shift</td></tr>
+      <tr><td><code>diis</code></td><td><code>str</code></td><td><code>"rdiis"</code> 启用 RDIIS</td></tr>
+      <tr><td><code>rdiis_prop</code></td><td><code>str</code></td><td>RDIIS 属性：<code>"dS"</code>（entropy）或 <code>"P"</code>（polarization）</td></tr>
+      <tr><td><code>rdiis_imp_idx</code></td><td><code>str | list</code></td><td>RDIIS impurity AO label（如 <code>["Co.*d"]</code>），在局部 fragment 中解析</td></tr>
+      <tr><td><code>rdiis_power</code></td><td><code>float</code></td><td>RDIIS 正则化幂次</td></tr>
+      <tr><td><code>avas_aolabels</code></td><td><code>list</code></td><td>AVAS AO labels（仅 <code>cahf-soscf</code>）</td></tr>
+      <tr><td><code>avas_threshold</code></td><td><code>float</code></td><td>AVAS 阈值（仅 <code>cahf-soscf</code>）</td></tr>
+      <tr><td><code>init_guess</code></td><td><code>str</code></td><td>初始猜测（仅 <code>cahf-soscf</code>）</td></tr>
+    </table>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="downstream">
+    <h2>下游接口</h2>
+    <p>FDMET 继承 SSDMET 的以下接口，用法完全相同：</p>
+    <table>
+      <tr><th>方法</th><th>说明</th></tr>
+      <tr><td><code>total_cas(es_cas)</code></td><td>将 embedded CAS 扩展为全体系 CAS：<code>[fo | es_orb @ mo | fv]</code></td></tr>
+      <tr><td><code>total_mf()</code></td><td>构造全体系 mean-field 对象</td></tr>
+      <tr><td><code>avas(aolabels, ...)</code></td><td>AVAS active space 构造</td></tr>
+      <tr><td><code>fo_ene(e_nuc)</code></td><td>Frozen occupied 轨道能量</td></tr>
+      <tr><td><code>save_chk() / load_chk()</code></td><td>HDF5 checkpoint 存取</td></tr>
+      <tr><td><code>search_impurity_ao_label(aolabels, base)</code></td><td>在 impurity AO 中搜索匹配的 embedded index</td></tr>
+    </table>
+    <div class="note">
+      <code>density_fit()</code> 目前抛出 <code>NotImplementedError</code>。FDMET 尚不支持 density fitting。
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="limitations">
+    <h2>已知限制与待开发功能</h2>
+    <ul>
+      <li><strong>Fragment 间静电作用缺失</strong>：fragment-local Hamiltonian 只来自截断的 impurity+ligand 局部分子，
+        其他 ligand 的核吸引势、库仑势、极化效应未进入。
+        可使用 <a href="https://xtb-docs.readthedocs.io/">xTB</a>（GFN-xTB 半经验方法）计算 fragment 间的静电势作为 embedding potential</li>
+      <li><strong>FO 轨道为空</strong>：当前 <code>nfo=0</code>，embedded 电子数等于全体系电子数。
+        后续可从全局近似 density 重新定义 FO，或只冻结明确的全局 core 轨道</li>
+      <li><strong>Density fitting 未实现</strong>：<code>density_fit()</code> 不可用</li>
+      <li><strong>二体积分未优化</strong>：仍使用全体系二体积分全局变换，未利用 fragment-local 二体积分</li>
+      <li><strong>CAHF 参数统一</strong>：所有 fragment 使用同一套 averaging scheme 参数</li>
+      <li><strong>Correlation potential 未自洽</strong>：fragment reference density 未与 DMET correlation potential 迭代更新</li>
+    </ul>
+
+    <h3>相关文件</h3>
+    <table>
+      <tr><th>文件</th><th>角色</th></tr>
+      <tr><td><code>embed_sim/fragment.py</code></td><td>Fragment-DMET 主实现</td></tr>
+      <tr><td><code>embed_sim/ssdmet.py</code></td><td>SSDMET 父类、Lowdin 正交化</td></tr>
+      <tr><td><code>embed_sim/cahf.py</code></td><td>CAHF / CAHF_SOSCF</td></tr>
+      <tr><td><code>embed_sim/rdiis.py</code></td><td>RDIIS 收敛加速</td></tr>
+      <tr><td><code>examples/fragment_dmet.py</code></td><td>CoSH4 完整示例</td></tr>
+      <tr><td><code>fragment.md</code></td><td>算法推导与公式（中文）</td></tr>
+    </table>
+  </section>
+</main>
+</body>
+</html>

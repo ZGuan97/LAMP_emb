@@ -315,6 +315,8 @@ $$
 
 当前 fragment-local CAHF 的单电子 Hamiltonian 只来自截断后的 `impurity + ligand_f` 局部 molecule，即 PySCF 在该 `fragment_mol` 上计算的 `hcore`。其他 ligand fragment 不在该局部 molecule 中，因此它们的核吸引势、电子库仑势、净负电荷静电场以及由此导致的轨道极化目前都没有进入第 `f` 个 fragment CAHF。换言之，`ligand_charges` 当前只决定对应局部 molecule 的电子数，还没有作为 point charge、embedding potential 或全局投影势作用到其他 fragment 的局部参考计算中。
 
+一个可行的改进方向是使用 xTB（GFN-xTB 半经验方法）计算 fragment 间的静电势，将其作为 embedding potential 引入各 fragment 的局部 Hamiltonian。
+
 ### 全局 AO index 与局部 fragment AO index
 
 `FDMET` 的输入分片按**原子编号**定义。用户指定 `imp_atoms`（原子编号或元素符号）和 `ligand_atoms`（每个 ligand 的原子编号列表），代码通过 `_atom_ids_to_ao_indices()` 将其转换为全局 AO index。设母体 molecule 的 AO index 为

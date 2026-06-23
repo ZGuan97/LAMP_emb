@@ -148,9 +148,10 @@ class FragmentMolecule:
             level_shift = kwargs.pop('level_shift', 0)
             kwargs.pop('max_memory', None)
             # Consume RDIIS keys (SOSCF does not use RDIIS)
-            rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx, True)
             if kwargs:
-                raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
+                rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx, True)
+                if kwargs:
+                    raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
             self.mf = cahf.CAHF_SOSCF(
                 self.mol, ncas=ncas, nelecas=nelecas, spin=spin,
                 avas_aolabels=avas_aolabels, avas_threshold=avas_threshold,
