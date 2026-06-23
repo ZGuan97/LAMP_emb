@@ -130,9 +130,11 @@
 
 FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</code></pre>
     <p>
-      <code>FDMET</code> 覆写 <code>build()</code> 和 <code>dump_flags()</code>，
-      新增 <code>CAHF()</code>（替代 <code>ROHF()</code>）、<code>rebuild_from_embedded_density()</code>、
-      <code>_embedded_cahf_initial_guess()</code>、<code>_cahf_mo_from_density()</code>。
+      <code>FDMET</code> 覆写 <code>build()</code>（全自动流水线）和 <code>dump_flags()</code>，
+      新增 <code>CAHF()</code>（替代 <code>ROHF()</code>）、
+      <code>rebuild_from_embedded_density()</code>（<code>build()</code> 内部自动调用）、
+      <code>run_fragment_loop()</code>、<code>finalize_embedded_space()</code>、
+      <code>setup_embedded_hamiltonian()</code>、<code>do_rebuild()</code>。
       <code>make_es_int1e()</code>、<code>make_es_int2e()</code>、<code>total_cas()</code>、
       <code>fo_ene()</code>、<code>save_chk()</code>/<code>load_chk()</code> 等继承自 <code>SSDMET</code>。
     </p>
@@ -151,7 +153,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <tr><td><code>fragment_to_parent_idx</code></td><td><code>list[int]</code></td><td>fragment AO index → 母体 AO index</td></tr>
       <tr><td><code>fragment_imp_idx</code></td><td><code>list[int]</code></td><td>fragment AO 中属于 impurity 的索引</td></tr>
       <tr><td><code>fragment_lig_idx</code></td><td><code>list[int]</code></td><td>fragment AO 中属于 ligand 的索引</td></tr>
-      <tr><td><code>charge</code></td><td><code>int</code></td><td>fragment 总电荷</td></tr>
       <tr><td><code>mf</code></td><td><code>object | None</code></td><td>SCF/CAHF 结果（构建时为 None）</td></tr>
     </table>
 
@@ -174,7 +175,7 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <tr><td><code>"cahf-soscf"</code></td><td><code>CAHF_SOSCF(mol, ...)</code></td><td>CAHF + AVAS + SOSCF 二阶收敛</td></tr>
       <tr><td><code>"rohf"</code></td><td><code>ROHF(mol).x2c()</code></td><td>标准 ROHF，调试路径</td></tr>
     </table>
-    <p>通用选项：<code>max_memory</code>、<code>max_cycle</code>、<code>level_shift</code>。</p>
+    <p>通用选项：<code>max_cycle</code>、<code>level_shift</code>。</p>
     <p>RDIIS 选项：<code>diis="rdiis"</code>、<code>rdiis_prop</code>、<code>rdiis_imp_idx</code>（在局部 fragment 中解析 AO label）、<code>rdiis_power</code>。</p>
 
     <h4><code>build_bath(threshold=1e-13)</code></h4>
@@ -253,10 +254,10 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
   <!-- ============================================================ -->
   <section id="build-workflow">
     <h2>Build 流程</h2>
-    <p><code>FDMET.build(verbose=3)</code> 是主入口，执行以下三个阶段：</p>
+    <p><code>FDMET.build(verbose=3)</code> 是全自动流水线，一次调用完成全部流程，返回收敛的 <code>es_mf</code>：</p>
 
     <h3>阶段一：Fragment 循环</h3>
-    <p>对每个 ligand fragment \(f\)：</p>
+    <p>内部方法 <code>run_fragment_loop(verbose)</code>。对每个 ligand fragment \(f\)：</p>
     <ol>
       <li><code>make_fragment_mol()</code> → <code>FragmentMolecule.from_parent_mol()</code></li>
       <li><code>frag.run_scf(fragment_scf, **scf_options)</code></li>
@@ -269,7 +270,8 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <li>拼接所有 fragment bath → <code>raw_bath</code>，拼接 fo → <code>raw_fo</code></li>
       <li><code>_complete_global_orbitals(mol, imp_idx, raw_bath, raw_fo, svd_tol)</code>：
         在固定 impurity 的全局 Lowdin 基下做 QR 正交化 + 秩筛选 + null space 补全</li>
-      <li>构造 <code>es_orb = [c_imp, bath_orb, (fo appended), (fv kept)]</code></li>
+      <li>内部方法 <code>finalize_embedded_space(c_imp, bath_orb, fo_orb, fv_orb)</code>：
+        构造 <code>es_orb = [c_imp, bath_orb, (fo appended), (fv kept)]</code> 并设置计数属性</li>
     </ol>
     <div class="note">
       <strong>当前 FO 策略：</strong>默认不构造全局 frozen occupied（<code>fo_orb = []</code>，<code>nfo = 0</code>）。
@@ -277,20 +279,26 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       若 impurity + bath 轨道数不足，代码直接报错。
     </div>
 
-    <h3>阶段三：嵌入空间 Hamiltonian</h3>
+    <h3>阶段三：嵌入空间 Hamiltonian + 第一次 CAHF</h3>
     <ol>
-      <li><code>make_es_int1e()</code>：投影 one-electron integrals + FO HF 贡献</li>
-      <li><code>make_es_int2e()</code>：投影 two-electron integrals</li>
-      <li><code>CAHF()</code>：构造 embedded CAHF 对象</li>
+      <li>内部方法 <code>setup_embedded_hamiltonian()</code>：<code>make_es_int1e()</code> + <code>make_es_int2e()</code> + <code>CAHF()</code></li>
+      <li><code>es_mf.kernel(es_dm)</code>：运行 embedded CAHF 至收敛</li>
     </ol>
+
+    <h3>阶段四：Rebuild + 第二次 CAHF</h3>
+    <ol>
+      <li>内部方法 <code>do_rebuild()</code>：从收敛 CAHF 密度重建 embedded space（详见 <a href="#rebuild">Rebuild</a>）</li>
+      <li><code>es_mf.kernel(es_dm)</code>：以投影密度为初猜，运行第二次 embedded CAHF 至收敛</li>
+    </ol>
+    <p>返回收敛的 <code>es_mf</code>。</p>
   </section>
 
   <!-- ============================================================ -->
   <section id="flowchart">
     <h2>计算流程图</h2>
-    <p>以下流程图展示 <code>FDMET.build()</code> 的完整计算流程，包括 rebuild 步骤：</p>
+    <p>以下流程图展示 <code>FDMET.build()</code> 全自动流水线的完整计算流程：</p>
 
-    <svg viewBox="-25 0 825 885" xmlns="http://www.w3.org/2000/svg"
+    <svg viewBox="-25 0 825 1075" xmlns="http://www.w3.org/2000/svg"
          style="max-width:800px;width:100%;display:block;margin:1.5rem auto;">
       <defs>
         <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -298,9 +306,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
         </marker>
         <marker id="ah-loop" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
           <polygon points="0 0,8 3,0 6" fill="#059669"/>
-        </marker>
-        <marker id="ah-opt" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-          <polygon points="0 0,8 3,0 6" fill="#94a3b8"/>
         </marker>
       </defs>
 
@@ -310,11 +315,10 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <rect x="50" y="15" width="700" height="34" rx="8" fill="#059669"/>
       <rect x="50" y="37" width="700" height="12" fill="#059669"/>
       <text x="70" y="38" fill="#fff" font-size="14" font-weight="600"
-            font-family="system-ui,sans-serif">阶段一：Fragment 循环</text>
+            font-family="system-ui,sans-serif">阶段一：Fragment 循环 — run_fragment_loop()</text>
       <text x="72" y="73" fill="#64748b" font-size="12"
             font-family="system-ui,sans-serif">对每个 ligand fragment f 执行以下步骤：</text>
 
-      <!-- Step 1 -->
       <text x="75" y="103" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">1.</tspan>
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">FragmentMolecule.from_parent_mol()</tspan>
@@ -323,7 +327,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <text x="200" y="123" fill="#94a3b8" font-size="10" font-style="italic"
             font-family="system-ui,sans-serif">→ frag_mol</text>
 
-      <!-- Step 2 -->
       <text x="75" y="163" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">2.</tspan>
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.run_scf()</tspan>
@@ -332,7 +335,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <text x="200" y="183" fill="#94a3b8" font-size="10" font-style="italic"
             font-family="system-ui,sans-serif">→ mf (density)</text>
 
-      <!-- Step 3 -->
       <text x="75" y="223" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">3.</tspan>
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.build_bath()</tspan>
@@ -341,19 +343,16 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <text x="200" y="243" fill="#94a3b8" font-size="10" font-style="italic"
             font-family="system-ui,sans-serif">→ bath_orb, fo_orb, fv_orb</text>
 
-      <!-- Step 4 -->
       <text x="75" y="283" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">4.</tspan>
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">frag.orbitals_to_parent()</tspan>
         <tspan fill="#64748b"> — 轨道系数映射回母体 AO basis</tspan>
       </text>
 
-      <!-- Step arrows -->
       <line x1="65" y1="108" x2="65" y2="148" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
       <line x1="65" y1="168" x2="65" y2="208" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
       <line x1="65" y1="228" x2="65" y2="268" stroke="#86efac" stroke-width="1.5" marker-end="url(#ah)"/>
 
-      <!-- Phase 1 → Phase 2 -->
       <line x1="400" y1="345" x2="400" y2="393" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
 
       <!-- ====== Phase 2: 全局合并 ====== -->
@@ -362,9 +361,8 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <rect x="50" y="400" width="700" height="34" rx="8" fill="#2563eb"/>
       <rect x="50" y="422" width="700" height="12" fill="#2563eb"/>
       <text x="70" y="423" fill="#fff" font-size="14" font-weight="600"
-            font-family="system-ui,sans-serif">阶段二：全局合并</text>
+            font-family="system-ui,sans-serif">阶段二：全局合并 — finalize_embedded_space()</text>
 
-      <!-- Step 1 -->
       <text x="75" y="460" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">1.</tspan>
         <tspan fill="#475569">拼接所有 fragment bath</tspan>
@@ -374,7 +372,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">raw_fo</tspan>
       </text>
 
-      <!-- Step 2 -->
       <text x="75" y="520" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">2.</tspan>
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">_complete_global_orbitals()</tspan>
@@ -382,7 +379,6 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
       <text x="95" y="540" fill="#64748b" font-size="12"
             font-family="system-ui,sans-serif">固定 impurity Lowdin 基下：QR 正交化 + 秩筛选 + null space 补全</text>
 
-      <!-- Step 3 -->
       <text x="75" y="580" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">3.</tspan>
         <tspan fill="#475569">构造</tspan>
@@ -393,72 +389,76 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
         <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">fv_orb</tspan>
       </text>
 
-      <!-- Step arrows -->
       <line x1="65" y1="468" x2="65" y2="508" stroke="#93c5fd" stroke-width="1.5" marker-end="url(#ah)"/>
       <line x1="65" y1="548" x2="65" y2="565" stroke="#93c5fd" stroke-width="1.5" marker-end="url(#ah)"/>
 
-      <!-- Phase 2 → Phase 3 -->
       <line x1="400" y1="630" x2="400" y2="673" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
 
-      <!-- ====== Phase 3: 嵌入空间 Hamiltonian ====== -->
-      <rect x="50" y="680" width="700" height="195" rx="8"
+      <!-- ====== Phase 3: 嵌入空间 Hamiltonian + 第一次 CAHF ====== -->
+      <rect x="50" y="680" width="700" height="145" rx="8"
             fill="#f5f3ff" stroke="#c4b5fd" stroke-width="1.5"/>
       <rect x="50" y="680" width="700" height="34" rx="8" fill="#7c3aed"/>
       <rect x="50" y="702" width="700" height="12" fill="#7c3aed"/>
       <text x="70" y="703" fill="#fff" font-size="14" font-weight="600"
-            font-family="system-ui,sans-serif">阶段三：嵌入空间 Hamiltonian</text>
+            font-family="system-ui,sans-serif">阶段三：嵌入空间 Hamiltonian + 第一次 CAHF</text>
 
-      <!-- Step 1 -->
       <text x="75" y="740" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">1.</tspan>
-        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">make_es_int1e()</tspan>
-        <tspan fill="#64748b"> — 投影单电子积分 + FO HF 贡献</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">setup_embedded_hamiltonian()</tspan>
+        <tspan fill="#64748b"> — 积分 + CAHF 对象</tspan>
       </text>
-      <text x="200" y="758" fill="#94a3b8" font-size="10" font-style="italic"
-            font-family="system-ui,sans-serif">→ es_int1e</text>
 
-      <!-- Step 2 -->
       <text x="75" y="790" font-size="13" font-family="system-ui,sans-serif">
         <tspan font-weight="600" fill="#1e293b">2.</tspan>
-        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">make_es_int2e()</tspan>
-        <tspan fill="#64748b"> — 投影双电子积分</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">es_mf.kernel()</tspan>
+        <tspan fill="#64748b"> — 运行 embedded CAHF 至收敛</tspan>
       </text>
-      <text x="200" y="808" fill="#94a3b8" font-size="10" font-style="italic"
-            font-family="system-ui,sans-serif">→ es_int2e</text>
 
-      <!-- Step 3 -->
-      <text x="75" y="845" font-size="13" font-family="system-ui,sans-serif">
-        <tspan font-weight="600" fill="#1e293b">3.</tspan>
-        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">CAHF()</tspan>
-        <tspan fill="#64748b"> — 构造 embedded CAHF 对象并运行</tspan>
-      </text>
-      <text x="200" y="863" fill="#94a3b8" font-size="10" font-style="italic"
-            font-family="system-ui,sans-serif">→ es_mf (converged)</text>
-
-      <!-- Step arrows -->
       <line x1="65" y1="745" x2="65" y2="778" stroke="#c4b5fd" stroke-width="1.5" marker-end="url(#ah)"/>
-      <line x1="65" y1="813" x2="65" y2="830" stroke="#c4b5fd" stroke-width="1.5" marker-end="url(#ah)"/>
 
-      <!-- ====== Loop Arrow (Phase 2 → Phase 1) ====== -->
-      <path d="M 755,625 L 755,120 Q 755,90 725,90 L 758,90"
+      <line x1="400" y1="830" x2="400" y2="868" stroke="#64748b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- ====== Phase 4: Rebuild + 第二次 CAHF ====== -->
+      <rect x="50" y="875" width="700" height="145" rx="8"
+            fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+      <rect x="50" y="875" width="700" height="34" rx="8" fill="#ea580c"/>
+      <rect x="50" y="897" width="700" height="12" fill="#ea580c"/>
+      <text x="70" y="898" fill="#fff" font-size="14" font-weight="600"
+            font-family="system-ui,sans-serif">阶段四：Rebuild + 第二次 CAHF — do_rebuild()</text>
+
+      <text x="75" y="935" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">1.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">do_rebuild()</tspan>
+        <tspan fill="#64748b"> — 从收敛密度重建 embedded space</tspan>
+      </text>
+
+      <text x="75" y="985" font-size="13" font-family="system-ui,sans-serif">
+        <tspan font-weight="600" fill="#1e293b">2.</tspan>
+        <tspan fill="#2563eb" font-family="'SF Mono','Fira Code',monospace" font-size="12">es_mf.kernel()</tspan>
+        <tspan fill="#64748b"> — 以投影密度为初猜，第二次 CAHF 至收敛</tspan>
+      </text>
+
+      <line x1="65" y1="940" x2="65" y2="973" stroke="#fdba74" stroke-width="1.5" marker-end="url(#ah)"/>
+
+      <!-- ====== Loop Arrow (Phase 1 内部) ====== -->
+      <path d="M 755,300 L 755,120 Q 755,90 725,90 L 758,90"
             fill="none" stroke="#059669" stroke-width="1.5"
             stroke-dasharray="6,3" marker-end="url(#ah-loop)"/>
       <text x="675" y="82" fill="#059669" font-size="11"
             font-family="system-ui,sans-serif">下一个 fragment</text>
 
-      <!-- ====== Rebuild Arrow (Phase 3 → Phase 1) ====== -->
-      <path d="M 30,870 L 30,860 L -12,860 L -12,120 Q -12,80 28,80 L 42,80"
-            fill="none" stroke="#94a3b8" stroke-width="1.5"
-            stroke-dasharray="4,3" marker-end="url(#ah-opt)"/>
-      <text x="8" y="855" fill="#94a3b8" font-size="11"
-            font-family="system-ui,sans-serif">rebuild</text>
+      <!-- ====== Output ====== -->
+      <text x="300" y="1055" font-size="14" font-weight="600" fill="#ea580c"
+            font-family="system-ui,sans-serif">返回收敛的 es_mf</text>
+      <line x1="400" y1="1025" x2="400" y2="1040" stroke="#64748b"
+            stroke-width="1.5" marker-end="url(#ah)"/>
     </svg>
 
     <p style="text-align:center; color:var(--muted); font-size:.88em; margin-top:-.5rem;">
       <span style="color:#059669;">■</span> 阶段一：Fragment 循环&emsp;
       <span style="color:#2563eb;">■</span> 阶段二：全局合并&emsp;
-      <span style="color:#7c3aed;">■</span> 阶段三：嵌入空间 Hamiltonian&emsp;
-      <span style="color:#94a3b8;">┈</span> rebuild
+      <span style="color:#7c3aed;">■</span> 阶段三：Hamiltonian + CAHF&emsp;
+      <span style="color:#ea580c;">■</span> 阶段四：Rebuild + CAHF
     </p>
   </section>
 
@@ -497,14 +497,20 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
   <!-- ============================================================ -->
   <section id="rebuild">
     <h2>Rebuild：从收敛密度重建嵌入空间</h2>
-    <p><code>FDMET.rebuild_from_embedded_density(threshold=None)</code> 在 embedded CAHF 收敛后调用：</p>
+    <p>
+      Rebuild 现在是 <code>build()</code> 阶段四的内部步骤（<code>do_rebuild()</code>）。
+      也可以通过 <code>rebuild_from_embedded_density(threshold=None)</code> 单独调用（向后兼容），
+      但通常无需手动调用。
+    </p>
+    <p><code>do_rebuild(threshold=None)</code> 的内部流程：</p>
     <ol>
       <li>将收敛 embedded CAHF density 变换到全局 Lowdin basis</li>
       <li>补充 frozen-occupied 密度（<code>fo_ldm @ fo_ldm.T × 2</code>）</li>
       <li>在环境 block 做自然轨道分解，按阈值分类 bath / fo / fv</li>
       <li><code>_complete_global_orbitals()</code> 正交化</li>
-      <li>重建 <code>es_orb</code>、<code>es_int1e</code>、<code>es_int2e</code></li>
+      <li><code>finalize_embedded_space()</code> 组装新 <code>es_orb</code></li>
       <li>将收敛 Lowdin density 投影到新 embedded basis 作为新 CAHF 初猜</li>
+      <li><code>setup_embedded_hamiltonian(guess_override=...)</code> 创建新 CAHF</li>
       <li>返回新的 <code>es_mf</code>（未收敛）</li>
     </ol>
     <p>
@@ -544,6 +550,27 @@ FragmentMolecule              (embed_sim/fragment.py, @dataclass, 独立类)</co
         <td>将 density matrix trace 缩放到目标电子数</td>
       </tr>
     </table>
+
+    <h3>FDMET Build 流程方法</h3>
+    <table>
+      <tr><th>方法</th><th>说明</th></tr>
+      <tr>
+        <td><code>run_fragment_loop(verbose)</code></td>
+        <td>阶段一：对所有 ligand 执行 fragment SCF + bath 构造，返回 <code>(fragment_mols, bath_blocks, fo_blocks)</code></td>
+      </tr>
+      <tr>
+        <td><code>finalize_embedded_space(c_imp, bath_orb, fo_orb, fv_orb)</code></td>
+        <td>阶段二后半：组装 <code>es_orb</code>、处理 FO/FV appending、设置所有计数属性并打印日志。<code>build()</code> 和 rebuild 共用</td>
+      </tr>
+      <tr>
+        <td><code>setup_embedded_hamiltonian(guess_override=None)</code></td>
+        <td>计算 <code>es_int1e</code>、<code>es_int2e</code>，创建 <code>CAHF</code> 对象，可选覆盖初猜。<code>build()</code> 和 rebuild 共用</td>
+      </tr>
+      <tr>
+        <td><code>do_rebuild(threshold=None)</code></td>
+        <td>阶段四：从收敛 CAHF 密度重建 embedded space，设置新 CAHF 并以投影密度为初猜</td>
+      </tr>
+    </table>
   </section>
 
   <!-- ============================================================ -->
@@ -573,17 +600,11 @@ mydmet = fragment.FDMET(
     },
 )
 
-# ── 2. Build: fragment SCF → bath → merge → Hamiltonian ──
+# ── 2. Build: 全自动流水线 ──
+# fragment SCF → bath → merge → Hamiltonian → CAHF → rebuild → CAHF
 mydmet.build(verbose=4)
 
-# ── 3. Embedded CAHF ──
-mydmet.es_mf.run()
-
-# ── 4. Rebuild from converged density ──
-mydmet.rebuild_from_embedded_density()
-mydmet.es_mf.run()
-
-# ── 5. Post-DMET: SA-CASSCF + NEVPT2 + SISO ──
+# ── 3. Post-DMET: SA-CASSCF + NEVPT2 + SISO ──
 es_cas = sacasscf_mixer.sacasscf_mixer(
     mydmet.es_mf, ncas=5, nelec=7, statelis=[0,40,0,10])
 es_cas.kernel()
