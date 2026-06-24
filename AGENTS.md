@@ -11,7 +11,7 @@ This file defines development rules for AI agents working on this repository.
 | Module | Role |
 |---|---|
 | `ssdmet.py` | Core single-shot DMET. `SSDMET` class, Lowdin orthogonalization, bath construction, embedded space integrals, checkpointing. |
-| `fragment.py` | Fragment-based DMET. `FDMET(SSDMET)`, fragment bath construction, fragment-density initial guess. **Active development.** |
+| `fragment.py` | Fragment-based DMET. `FDMET(SSDMET)`, fragment bath construction, fragment-density initial guess. `build()` is a fully automatic pipeline (fragment SCF → bath → merge → CAHF → rebuild → CAHF). **Active development.** |
 | `cahf.py` | Configuration-averaged Hartree-Fock. `CAHF(ROHF)` with fractional occupation Roothaan equations. |
 | `aodmet.py` | AO-based DMET variant. `AODMET(SSDMET)`, environment-only orthogonalization. |
 | `df.py` | Density-fitting extensions. `DFSSDMET`, `DFAODMET`, `DFNEVPT`, `DFSISO`. |
@@ -124,7 +124,13 @@ This file defines development rules for AI agents working on this repository.
 - Avoid introducing a second implementation of impurity-preserving orthogonalization. Reuse the existing `preserve_imp` path.
 - For CAHF, fragment SCF, density construction, bath construction, and embedded cluster construction, record assumptions and unresolved questions in `fragment.md`.
 - Example coverage can be minimal at first. A single example with one fragment is enough unless more examples are explicitly requested.
-- `build()` uses a single loop per ligand: `make_fragment_mol` → `frag.run_scf` → `frag.build_bath` → `frag.orbitals_to_parent`. All steps are `FragmentMolecule` methods.
+- `build()` is a fully automatic pipeline with four phases: (1) fragment SCF + bath, (2) global merge, (3) Hamiltonian + first CAHF, (4) rebuild + second CAHF. Returns converged `es_mf`.
+- Build pipeline methods are public (no `_` prefix): `run_fragment_loop`, `finalize_embedded_space`, `build_embedded_hamiltonian`, `set_embedded_mf`, `run_embedded_scf`, `do_rebuild`, `validate_atom_partition`.
+- `do_rebuild()` works entirely within the first embedded space: diagonalizes the environment block of the converged embedded density, re-classifies bath / FO. Only bath orbitals enter the new embedded space; FO orbitals become external frozen (accumulated into `self.fo_orb`, `self.nfo += nfo_new`). No global Löwdin transform or `_complete_global_orbitals()` is needed. `make_es_int1e()` automatically includes the updated FO mean-field J/K contribution.
+- `run_embedded_scf()` dispatches `kernel()` for both standard CAHF (density-matrix guess) and Newton/SOSCF (`mo_coeff`/`mo_occ` guess). The `_newton` flag is stored on `es_mf` by `CAHF()`.
+- `FragmentMolecule` does not store `charge`; it is available via `mol.charge`.
+- `max_memory` is not explicitly managed; PySCF defaults are used throughout.
+- `validate_atom_partition()` enforces: impurity ∩ ligand = ∅, impurity ∪ ligand = all parent atoms.
 
 ## Testing
 
@@ -149,4 +155,5 @@ This file defines development rules for AI agents working on this repository.
 
 - Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `FragmentMolecule.run_scf` consumes keys with `pop`.
 - **Fragment two-electron integral optimization**: One advantage of the fragment-based DMET approach is that it avoids global two-electron integral transformation — each fragment only needs its own local two-electron integrals. This optimization has not yet been implemented; the current code still transforms the full-molecule two-electron integrals globally.
+- **`cahf-soscf` embedded path**: The embedded CAHF currently only supports standard CAHF + optional Newton. The `cahf-soscf` fragment SCF type is only used for fragment-level SCF, not embedded CAHF. Consider whether SOSCF should also be available for the embedded CAHF step.
 

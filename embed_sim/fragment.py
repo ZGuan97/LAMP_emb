@@ -350,7 +350,7 @@ def _resolve_indices(ao_idx, name, lookup):
     return indices
 
 
-def _complete_global_orbitals(mol, impurity_idx, bath_orb, fo_orb,
+def complete_global_orbitals(mol, impurity_idx, bath_orb, fo_orb,
                               svd_tol=1e-10):
     caolo, cloao = ssdmet.lowdin_orth(
         mol, imp_idx=list(impurity_idx), preserve_imp=True
@@ -666,20 +666,18 @@ class FDMET(ssdmet.SSDMET):
     def do_rebuild(self, threshold=None):
         """Rebuild embedded space from converged CAHF density.
 
-        Transforms the converged embedded CAHF density to the global
-        Lowdin basis, decomposes the environment block into natural
-        orbitals, re-classifies them, and sets up a new embedded CAHF
-        with the projected density as initial guess.
+        Works entirely within the first embedded space: diagonalizes the
+        environment block of the converged embedded density, re-classifies
+        bath / frozen-occupied orbitals, and projects the converged density
+        into the new embedded basis.
+
+        After this method, call ``set_embedded_mf()`` to construct a new
+        embedded CAHF with the projected density as initial guess.
 
         Parameters
         ----------
         threshold : float, optional
             Defaults to ``self.threshold``.
-
-        Returns
-        -------
-        es_mf : CAHF
-            New embedded CAHF object (not converged).
         """
         if self.es_mf is None:
             raise RuntimeError(
@@ -687,57 +685,68 @@ class FDMET(ssdmet.SSDMET):
         if threshold is None:
             threshold = self.threshold
 
-        # Converged density in embedded basis
+        nimp = len(self.imp_idx)
+
+        # Converged density in the first embedded basis
         mo = self.es_mf.mo_coeff
         mo_occ = self.es_mf.mo_occ
         dm_es = (mo * mo_occ) @ mo.T.conj()
         dm_es = (dm_es + dm_es.T.conj()) * 0.5
 
-        # Transform to Lowdin basis
-        caolo, cloao = ssdmet.lowdin_orth(
-            self.mol, imp_idx=self.imp_idx, preserve_imp=True)
-        U = cloao @ self.es_orb
-        ldm = U @ dm_es @ U.T.conj()
-        # Supplement with frozen-occupied density
-        if self.fo_orb.shape[1] > 0:
-            fo_ldm = cloao @ self.fo_orb
-            ldm = ldm + fo_ldm @ fo_ldm.T.conj() * 2
-        ldm = (ldm + ldm.T.conj()) * 0.5
-
-        # Environment natural orbital decomposition
-        env_idx = [x for x in range(ldm.shape[0])
-                   if x not in self.imp_idx]
-        ldm_env = ldm[env_idx, :][:, env_idx]
-        occ_env, orb_env = np.linalg.eigh(ldm_env)
+        # Diagonalize environment block to re-classify bath / FO
+        env_idx = list(range(nimp, self.nes))
+        dm_env = dm_es[np.ix_(env_idx, env_idx)]
+        occ_env, orb_env = np.linalg.eigh(dm_env)
 
         bath_idx = np.nonzero(
             (occ_env >= threshold) & (occ_env <= 2 - threshold))[0]
         fo_idx = np.nonzero(occ_env > 2 - threshold)[0]
         nbath_new = len(bath_idx)
-        nfo_env = len(fo_idx)
 
-        bath_orb = (caolo[:, env_idx] @ orb_env[:, bath_idx]
-                    if nbath_new > 0
-                    else np.zeros((self.mol.nao, 0)))
-        fo_orb = (caolo[:, env_idx] @ orb_env[:, fo_idx]
-                  if nfo_env > 0
-                  else np.zeros((self.mol.nao, 0)))
-
-        c_imp, bath_orb, fo_orb, fv_orb = _complete_global_orbitals(
-            self.mol, self.imp_idx, bath_orb, fo_orb=fo_orb,
-            svd_tol=threshold)
-
-        self.finalize_embedded_space(c_imp, bath_orb, fo_orb, fv_orb)
-
-        if nfo_env > 0:
+        if len(fo_idx) > 0:
             logger.info(self,
                         '  (env natural occ range of FO: '
                         '%.12g .. %.12g)',
                         occ_env[fo_idx].min(), occ_env[fo_idx].max())
 
-        # Project converged density into new embedded basis
-        U_new = cloao @ self.es_orb
-        dm_es_new = U_new.T.conj() @ ldm @ U_new
+        # Build transformation within the first embedded space:
+        # new es_orb = old es_orb @ T,  T = block_diag(I_imp, bath)
+        es_orb_old = self.es_orb
+        bath_orb_env = orb_env[:, bath_idx]
+        fo_orb_env = orb_env[:, fo_idx]
+        T = block_diag(np.eye(nimp), bath_orb_env)
+        self.es_orb = es_orb_old @ T
+
+        # FO orbitals become external frozen (in AO basis)
+        nfo_new = len(fo_idx)
+        if nfo_new > 0:
+            env_part = es_orb_old[:, env_idx]
+            fo_orb_ao = env_part @ fo_orb_env
+            self.fo_orb = np.hstack((self.fo_orb, fo_orb_ao))
+        self.fv_orb = np.zeros((self.mol.nao, 0))
+        self.nfo += nfo_new
+        self.nfv = 0
+        self.nbath = nbath_new
+        self.nappended_fo = 0
+        self.nkept_fv = 0
+        self.nes = self.es_orb.shape[1]
+
+        logger.info(self, 'number of impurity orbitals %d', nimp)
+        logger.info(self, 'number of bath orbitals %d', nbath_new)
+        logger.info(self, 'number of frozen occupied orbitals %d', self.nfo)
+        logger.info(self, 'rebuild: total embedded orbitals %d', self.nes)
+
+        # Transform integrals to new embedded basis via AO
+        # make_es_int1e includes FO mean-field J/K from self.fo_orb
+        self.es_int1e = self.make_es_int1e()
+        self.es_int2e = self.make_es_int2e()
+
+        logger.info(self,
+                    'energy from frozen occupied orbitals %s',
+                    self.fo_ene(e_nuc=False))
+
+        # Project converged non-FO density into new embedded basis
+        dm_es_new = T.T.conj() @ dm_es @ T
         dm_es_new = (dm_es_new + dm_es_new.T.conj()) * 0.5
 
         # Diagonalize for CAHF MO structure
@@ -756,21 +765,13 @@ class FDMET(ssdmet.SSDMET):
         es_dm = (es_nat_orb * mo_occ_new) @ es_nat_orb.T.conj()
         es_dm = (es_dm + es_dm.T.conj()) * 0.5
 
-        self.build_embedded_hamiltonian()
-        self.set_embedded_mf(
-            guess_override={
-                'es_dm': es_dm,
-                'mo_coeff': es_nat_orb,
-                'mo_occ': mo_occ_new,
-                'init_guess_info': {
-                    'kind': 'rebuild_projected',
-                    'nat_occ': es_occ,
-                },
-            })
-
-        logger.info(self,
-                    'rebuild: total embedded orbitals %d', self.nes)
-        return self.es_mf
+        # Store projected density for set_embedded_mf()
+        self._rebuild_data = {
+            'es_dm': es_dm,
+            'mo_coeff': es_nat_orb,
+            'mo_occ': mo_occ_new,
+            'es_occ': es_occ,
+        }
 
     def search_impurity_ao_label(self, aolabels, base=0):
         parent_idx = list(gto.mole._aolabels2baslst(self.mol, aolabels, base=0))
@@ -874,7 +875,7 @@ class FDMET(ssdmet.SSDMET):
         raw_bath = np.hstack(bath_blocks)
         raw_fo = np.hstack(fo_blocks)
         c_imp, bath_orb, fo_orb, fv_orb = \
-            _complete_global_orbitals(
+            complete_global_orbitals(
                 self.mol, self.imp_idx, raw_bath,
                 raw_fo, svd_tol=self.threshold)
         self.finalize_embedded_space(
@@ -887,6 +888,7 @@ class FDMET(ssdmet.SSDMET):
 
         # Phase 4: Rebuild from converged density + second CAHF
         self.do_rebuild()
+        self.set_embedded_mf()
         self.run_embedded_scf()
 
         return self.es_mf
@@ -945,6 +947,19 @@ class FDMET(ssdmet.SSDMET):
     def _embedded_cahf_initial_guess(self, ncas, nelecas, nelectron):
         if self.embedded_init_guess != 'fragment_density':
             es_dm = np.diag(self.es_occ)
+
+        # Use rebuild projected density if available
+        rebuild_data = getattr(self, '_rebuild_data', None)
+        if rebuild_data is not None:
+            del self._rebuild_data
+            mo_coeff = rebuild_data['mo_coeff']
+            mo_occ = rebuild_data['mo_occ']
+            es_dm = rebuild_data['es_dm']
+            self.es_init_guess_info = {
+                'kind': 'rebuild_projected',
+                'nat_occ': rebuild_data['es_occ'],
+            }
+            return mo_coeff, mo_occ, es_dm
 
         dm_parent = _fragment_density_to_parent_density(
             self.mol, self.fragment_mols
@@ -1055,9 +1070,10 @@ class FDMET(ssdmet.SSDMET):
     def rebuild_from_embedded_density(self, threshold=None):
         """Re-select bath orbitals using the converged embedded CAHF density.
 
-        Convenience wrapper around :meth:`do_rebuild`.  Sets up a new
-        embedded CAHF with the projected density as initial guess but
-        does **not** run it.  Call ``self.es_mf.kernel()`` afterwards.
+        Convenience wrapper around :meth:`do_rebuild` and
+        :meth:`set_embedded_mf`.  Sets up a new embedded CAHF with the
+        projected density as initial guess but does **not** run it.
+        Call ``self.es_mf.kernel()`` afterwards.
 
         Parameters
         ----------
@@ -1069,7 +1085,9 @@ class FDMET(ssdmet.SSDMET):
         es_mf : CAHF
             New embedded CAHF object (not converged).
         """
-        return self.do_rebuild(threshold)
+        self.do_rebuild(threshold)
+        self.set_embedded_mf()
+        return self.es_mf
 
     def density_fit(self, with_df=None):
         raise NotImplementedError(
