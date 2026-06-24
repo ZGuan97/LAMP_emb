@@ -610,38 +610,19 @@ class FDMET(ssdmet.SSDMET):
         logger.info(self, 'nuclear repulsion energy %s',
                     self.mol.energy_nuc())
 
-    def set_embedded_mf(self, guess_override=None):
+    def set_embedded_mf(self):
         """Construct the embedded CAHF mean-field object.
 
         Requires ``es_int1e``, ``es_int2e``, ``nes``, ``nfo`` to be set.
-
-        Parameters
-        ----------
-        guess_override : dict, optional
-            If provided, overrides the default initial guess.
-            Keys: ``'es_dm'`` (required), ``'mo_coeff'``, ``'mo_occ'``,
-            ``'init_guess_info'``.
+        Initial guess is determined by ``_embedded_cahf_initial_guess``,
+        which selects fragment-density or rebuild-projected path
+        automatically.
 
         Returns
         -------
         es_mf : CAHF
         """
         self.es_mf = self.CAHF(**self.fragment_scf_options)
-
-        if guess_override is not None:
-            self.es_dm = guess_override['es_dm']
-            if 'mo_coeff' in guess_override:
-                self.es_mf.mo_coeff = guess_override['mo_coeff']
-            if 'mo_occ' in guess_override:
-                self.es_mf.mo_occ = guess_override['mo_occ']
-            self.es_mf.get_init_guess = (
-                lambda *args, **kwargs: self.es_dm)
-            if 'init_guess_info' in guess_override:
-                if not hasattr(self, 'es_init_guess_info'):
-                    self.es_init_guess_info = {}
-                self.es_init_guess_info.update(
-                    guess_override['init_guess_info'])
-
         return self.es_mf
 
     def run_embedded_scf(self):
@@ -671,8 +652,9 @@ class FDMET(ssdmet.SSDMET):
         bath / frozen-occupied orbitals, and projects the converged density
         into the new embedded basis.
 
-        After this method, call ``set_embedded_mf()`` to construct a new
-        embedded CAHF with the projected density as initial guess.
+        After this method, call ``build_embedded_hamiltonian()`` then
+        ``set_embedded_mf()`` to construct a new embedded CAHF with the
+        projected density as initial guess.
 
         Parameters
         ----------
@@ -735,15 +717,6 @@ class FDMET(ssdmet.SSDMET):
         logger.info(self, 'number of bath orbitals %d', nbath_new)
         logger.info(self, 'number of frozen occupied orbitals %d', self.nfo)
         logger.info(self, 'rebuild: total embedded orbitals %d', self.nes)
-
-        # Transform integrals to new embedded basis via AO
-        # make_es_int1e includes FO mean-field J/K from self.fo_orb
-        self.es_int1e = self.make_es_int1e()
-        self.es_int2e = self.make_es_int2e()
-
-        logger.info(self,
-                    'energy from frozen occupied orbitals %s',
-                    self.fo_ene(e_nuc=False))
 
         # Project converged non-FO density into new embedded basis
         dm_es_new = T.T.conj() @ dm_es @ T
@@ -888,6 +861,7 @@ class FDMET(ssdmet.SSDMET):
 
         # Phase 4: Rebuild from converged density + second CAHF
         self.do_rebuild()
+        self.build_embedded_hamiltonian()
         self.set_embedded_mf()
         self.run_embedded_scf()
 
@@ -1070,9 +1044,10 @@ class FDMET(ssdmet.SSDMET):
     def rebuild_from_embedded_density(self, threshold=None):
         """Re-select bath orbitals using the converged embedded CAHF density.
 
-        Convenience wrapper around :meth:`do_rebuild` and
-        :meth:`set_embedded_mf`.  Sets up a new embedded CAHF with the
-        projected density as initial guess but does **not** run it.
+        Convenience wrapper around :meth:`do_rebuild`,
+        :meth:`build_embedded_hamiltonian`, and :meth:`set_embedded_mf`.
+        Sets up a new embedded CAHF with the projected density as initial
+        guess but does **not** run it.
         Call ``self.es_mf.kernel()`` afterwards.
 
         Parameters
@@ -1086,6 +1061,7 @@ class FDMET(ssdmet.SSDMET):
             New embedded CAHF object (not converged).
         """
         self.do_rebuild(threshold)
+        self.build_embedded_hamiltonian()
         self.set_embedded_mf()
         return self.es_mf
 
