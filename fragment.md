@@ -295,7 +295,7 @@ $$
 2. `build()` 进入 fragment bath 路径。该路径目前显式抛出 `NotImplementedError`，避免错误地根据全局 SCF density 构造 `FDMET` bath orbital。
 3. `FDMET` 的 impurity 和 fragments 按**原子编号**定义：`imp_atoms` 接受原子编号、元素符号或其列表，所有指定原子的基函数自动归入 impurity；`ligand_atoms` 为原子编号列表的列表。内部仍通过 `_atom_ids_to_ao_indices()` 将原子编号转换为 AO index list，以保持与下游 Lowdin 正交化等数值接口的兼容。`imp_idx` property 返回的是 AO index（从 `imp_atoms` 派生），不再直接接受 AO label 输入。
 4. `imp_charge` 和 `ligand_charges` 作为显式输入保存；第 $f$ 个 fragment-local molecule 的总电荷取为 `imp_charge + ligand_charges[f]`。
-5. `fragment_scf`、`threshold` 等参数已经在类中保留，供后续 fragment-local bath builder 对接。
+5. `fragment_scf_options` 与 `threshold` 等参数已经在类中保留，供 fragment-local bath builder 对接；局部 reference 固定为 `CAHF_SOSCF`。
 6. `examples/fragment_dmet.py` 中已经为 `Co(SH)_4` 定义分片：impurity 为 Co，`L1` 到 `L4` 分别是四个 SH ligand fragment，并显式给出 Co 与每个 SH ligand 的电荷。
 
 这一阶段的基空间约定如下：真正的 fragment-local 实现应从每个 $\mathcal{I}\oplus\mathcal{L}_f$ 的局部 reference density 构造 bath，而不是使用 whole-system SCF density。后续 fragment bath builder 的最终输出仍应为全局 AO coefficient `es_orb`、`fo_orb` 和 `fv_orb`，以便继续复用现有 Hamiltonian projection、AVAS、`total_cas` 和 SISO 接口。
@@ -306,10 +306,16 @@ $$
 
 1. 对每个 ligand fragment $f$，取全局 AO index 集合 $\mathcal{I}\cup\mathcal{L}_f$，并找到这些 AO 所在的原子。
 2. 用这些原子从母体 `Mole` 复制出一个截断的 `fragment_mol`。坐标使用 Bohr 单位，basis 和 ECP 复用母体 molecule 的解析后数据。
-3. 在 `fragment_mol` 上运行 fragment-local reference。默认路径为 CAHF；也保留 `rohf` 作为调试路径。
+3. 在 `fragment_mol` 上运行 fragment-local `CAHF_SOSCF` reference（ROHF 预 SCF、AVAS 和二阶 CAHF 收敛）。
 4. 返回 `FragmentMolecule`，其中保存 `fragment_mol`、`parent_atom_ids`（fragment 原子到母体原子的映射）、局部 `mf`（SCF 完成后赋值）、涉及的全局 atom/AO index，以及全局 AO 到局部 AO 的 impurity/ligand 分块映射和 fragment 总电荷。
 
 当前 CAHF 的默认 active-space 参数为 `ncas=5, nelecas=7`，对应当前 Co d7 示例的最小默认值。更一般体系应通过 `fragment_scf_options` 显式传入。`FDMET` 根据 `imp_charge + ligand_charges[f]` 计算第 $f$ 个 fragment 子体系的总 charge，并传给 `FragmentMolecule.from_parent_mol()` 构造局部 molecule，再由 `FragmentMolecule.run_scf()` 运行 fragment SCF。`FDMET.build()` 的单循环流程为：`from_parent_mol` → `run_scf` → `build_bath` → `orbitals_to_parent`。
+
+为便于检查长计算日志，`FDMET.build()` 会以明确的分隔线依次标记四个阶段：fragment CAHF/bath、全局 bath/FO 合并、第一次 embedded CAHF、rebuild 与最终 embedded CAHF。
+
+局部 `build_bath()` 中，`cloes` 的列顺序为 `[embedded space | FO | FV]`，其中 embedded space 的维度为 `nimp + nbath`。因此提取 FO/FV 时必须跳过完整 embedded-space block；实现会检查 `nbath + nfo + nfv` 是否等于局部环境 AO 数。
+
+在第一次 embedded CAHF 初猜前，日志还会输出 fragment-density electron diagnostic：拼接 density 的 `Tr(SD)`，以及其在 ES、FO、FV 子空间中的电子数投影。三者之和应与 `Tr(SD)` 一致；若 ES 电子数显著低于嵌入电子数而 FV 投影非零，说明局部 fragment 分类出的 FV 在拼接 density 中并非真正的空轨道，不能用整体 trace rescale 修正。
 
 局部 fragment SCF 的输出等级由 `FDMET.build(verbose=3)` 控制，与外层 `FDMET.verbose` 分开。该参数只属于本次 build 行为，不保存在 `FDMET` 构造器中。
 
@@ -374,19 +380,7 @@ $$
 
 这一点很重要：局部 density、局部 MO 和局部 bath orbital 都首先生活在 `fragment_mol` 的局部 AO basis 中，不能直接拿它们的 index 当作母体 molecule 的全局 AO index 使用。
 
-`fragment_scf_options` 现在也支持 fragment-local RDIIS：
-
-```python
-fragment_scf_options={
-    "diis": "rdiis",
-    "rdiis_prop": "dS",
-    "rdiis_imp_idx": ["Co.*d"],
-    "rdiis_power": 0.2,
-}
-```
-
-其中 `rdiis_imp_idx` 在每个局部 `fragment_mol` 中解析，因此可以直接使用局部 AO label/pattern。
-若没有显式设置 `rdiis_mute`，RDIIS 的输出跟随 `verbose`：`verbose < logger.INFO` 时静音，因此默认 `verbose=3` 不输出 RDIIS entropy；`verbose=4` 时输出。
+局部 reference 固定为 `CAHF_SOSCF`，不再维护 `cahf` 或 `rohf` 的选择分支。若将来需要不同的局部 reference，可通过 `fragment_scf_runner` 传入 callable；它接收 `FragmentMolecule` 作为第一个参数并返回已收敛的 mean-field 对象。
 
 ### 关键方法
 
@@ -400,8 +394,8 @@ def from_parent_mol(cls, parent_mol, impurity_atoms, ligand_atoms,
 ```
 
 ```python
-def run_scf(self, fragment_scf="rohf", verbose=3, **kwargs):
-    """运行 fragment SCF/CAHF，结果存储在 self.mf 中。"""
+def run_scf(self, verbose=3, scf_runner=None, **kwargs):
+    """运行默认 CAHF_SOSCF，结果存储在 self.mf 中。"""
 ```
 
 ```python
@@ -436,7 +430,7 @@ def orbitals_to_parent(self, frag_orb, nao):
 
 默认 `es_occ` 使用 embedded space 内的 Aufbau-like 初猜，占据数只用于构造 embedded CAHF 的初始密度。它不是由全局 reference density 对角化得到的自然占据数。fragment bath 的自然占据数目前只作为诊断信息保留。
 
-`FDMET.CAHF()` 仿照 `SSDMET.ROHF()` 构造嵌入空间 mean-field 对象。它接收和 `fragment_scf_options` 一致的常用 CAHF/SCF 参数，例如 `ncas`、`nelecas`、`cahf_spin`、`max_cycle`、`level_shift` 和 `diis`。由于嵌入空间没有 PySCF AO labels，若 embedded CAHF 的 RDIIS 参数中提供的是 AO label/pattern 形式的 `rdiis_imp_idx`，当前实现会改用嵌入空间中的 impurity block index。
+`FDMET.CAHF()` 仿照 `SSDMET.ROHF()` 构造嵌入空间 mean-field 对象。它接收和 `fragment_scf_options` 一致的常用 CAHF/SCF 参数，例如 `ncas`、`nelecas`、`cahf_spin`、`max_cycle`、`level_shift` 和 `diis`。嵌入 CAHF 默认使用二阶 Newton/SOSCF 收敛；由于嵌入空间没有 PySCF AO labels，它不调用 fragment-local 的 `CAHF_SOSCF` AVAS wrapper。若需要标准一阶 CAHF，可显式设定 `newton=False`。由于嵌入空间没有 PySCF AO labels，若 embedded CAHF 的 RDIIS 参数中提供的是 AO label/pattern 形式的 `rdiis_imp_idx`，当前实现会改用嵌入空间中的 impurity block index。
 
 ### Fragment-density embedded CAHF initial guess
 

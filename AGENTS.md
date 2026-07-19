@@ -131,13 +131,17 @@ This file defines development rules for AI agents working on this repository.
 - `FragmentMolecule` does not store `charge`; it is available via `mol.charge`.
 - `max_memory` is not explicitly managed; PySCF defaults are used throughout.
 - `validate_atom_partition()` enforces: impurity ∩ ligand = ∅, impurity ∪ ligand = all parent atoms.
+- `FragmentMolecule.build_bath()` constructs `cloes` with column order `[embedded space | FO | FV]`, where the embedded-space width is `nimp + nbath`. FO/FV extraction must therefore start at `nimp + nbath` and `nimp + nbath + nfo`, respectively. Always enforce `nbath + nfo + nfv == nenv`; an offset error here can place occupied embedded orbitals into FV and invalidate the entire global merge.
+- The initial global partition must satisfy, in the parent AO metric, `C_full† S C_full ≈ I` for `C_full = [es_orb | fo_orb | fv_orb]`, and `Tr(S D_parent) ≈ Tr(D_ES) + Tr(D_FO) + Tr(D_FV)`. A global FV generated from locally zero-occupation FV spaces must have negligible projected occupation. Do not use a large trace rescale to hide violation of these conditions; diagnose the bath/FO/FV merge first.
+- `complete_global_orbitals()` receives only parent-AO bath/FO coefficients. The density is independently assembled by `_fragment_density_to_parent_density()` from ligand diagonal blocks, impurity–ligand cross blocks, and averaged impurity blocks; cross blocks between different ligand groups are zero by construction. Keep this AO-metric distinction explicit when debugging global FV occupation.
 
 ## Testing
 
-- Activate the `pyscf` conda environment before running tests: `conda activate pyscf`.
+- Run Python checks through the `pyscf` conda environment, preferably `/opt/anaconda3/bin/conda run -n pyscf ...`.
 - There is no formal test framework. Validation is done through example scripts in `examples/`.
 - To syntax-check a module: `python -m py_compile embed_sim/fragment.py`.
 - To test fragment DMET: `python examples/fragment_dmet.py`.
+- Matrix-structure regression checks: `python examples/check_fragment_matrices.py` for CoSH4 and `python examples/CoSPh4/check_fragment_matrices.py` for the two-ligand CoSPh4 setup. They verify local FV occupancy, stitched-density block structure, and inter-ligand overlap blocks before an expensive full calculation.
 - When no project-level test command exists, run the smallest relevant import, example, or numerical sanity check.
 - Report which checks were run and whether they passed.
 - Testing conventions may change later.
@@ -155,5 +159,4 @@ This file defines development rules for AI agents working on this repository.
 
 - Consider whether `fragment_scf_options` should be passed with `**` expansion instead of `dict(...)` copy in `build()`. Currently the copy is needed because `FragmentMolecule.run_scf` consumes keys with `pop`.
 - **Fragment two-electron integral optimization**: One advantage of the fragment-based DMET approach is that it avoids global two-electron integral transformation — each fragment only needs its own local two-electron integrals. This optimization has not yet been implemented; the current code still transforms the full-molecule two-electron integrals globally.
-- **`cahf-soscf` embedded path**: The embedded CAHF currently only supports standard CAHF + optional Newton. The `cahf-soscf` fragment SCF type is only used for fragment-level SCF, not embedded CAHF. Consider whether SOSCF should also be available for the embedded CAHF step.
-
+- **Embedded CAHF solver**: Embedded CAHF uses PySCF Newton/SOSCF by default; set `newton=False` in `fragment_scf_options` only when deliberately testing the standard CAHF path.

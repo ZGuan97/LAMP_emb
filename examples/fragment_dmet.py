@@ -53,7 +53,6 @@ mydmet = fragment.FDMET(
     imp_charge=impurity['charge'],
     ligand_atoms=ligand_atoms,
     ligand_charges=ligand_charges,
-    fragment_scf='cahf-soscf',
     keep_fv_orbitals=False,
     embedded_init_guess='fragment_density',
     embedded_active_aolabels='Co 3d',

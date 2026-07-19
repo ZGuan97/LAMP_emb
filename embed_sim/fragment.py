@@ -112,67 +112,54 @@ class FragmentMolecule:
                    fragment_imp_idx=fragment_imp_idx,
                    fragment_lig_idx=fragment_lig_idx)
 
-    def run_scf(self, fragment_scf="rohf", verbose=3, **kwargs):
-        """Run fragment SCF/CAHF, stores result in ``self.mf``.
+    def run_scf(self, verbose=3, scf_runner=None, **kwargs):
+        """Run the fragment reference calculation and store it in ``self.mf``.
 
         Parameters
         ----------
-        fragment_scf : str
-            ``"cahf"`` or ``"rohf"``.
         verbose : int
             Verbosity for the fragment SCF output.
+        scf_runner : callable, optional
+            Future extension point for an alternative fragment reference.
+            It receives this ``FragmentMolecule`` as its first argument and
+            must return a converged mean-field object.
         **kwargs
             Additional SCF options.
         """
-        fragment_scf = fragment_scf.lower()
-        if fragment_scf == "cahf":
-            ncas = kwargs.pop('ncas', 5)
-            nelecas = kwargs.pop('nelecas', 7)
-            mf = cahf.CAHF(self.mol, ncas=ncas, nelecas=nelecas,
-                           spin=kwargs.pop('cahf_spin', self.mol.spin)).x2c()
-        elif fragment_scf == "cahf-soscf":
-            ncas = kwargs.pop('ncas', 5)
-            nelecas = kwargs.pop('nelecas', 7)
-            spin = kwargs.pop('cahf_spin', self.mol.spin)
-            avas_aolabels = kwargs.pop('avas_aolabels')
-            avas_threshold = kwargs.pop('avas_threshold', 0.5)
-            init_guess = kwargs.pop('init_guess', 'atom')
-            pre_scf_max_cycle = kwargs.pop('pre_scf_max_cycle', 0)
-            max_cycle = kwargs.pop('max_cycle', 200)
-            conv_tol = kwargs.pop('conv_tol', 1e-9)
-            level_shift = kwargs.pop('level_shift', 0)
-            # Consume RDIIS keys (SOSCF does not use RDIIS)
-            if kwargs:
-                rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx, True)
-                if kwargs:
-                    raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
-            self.mf = cahf.CAHF_SOSCF(
-                self.mol, ncas=ncas, nelecas=nelecas, spin=spin,
-                avas_aolabels=avas_aolabels, avas_threshold=avas_threshold,
-                init_guess=init_guess, pre_scf_max_cycle=pre_scf_max_cycle,
-                max_cycle=max_cycle, conv_tol=conv_tol, level_shift=level_shift,
-                verbose=verbose,
-            )
-            return
-        elif fragment_scf == "rohf":
-            mf = scf.rohf.ROHF(self.mol).x2c()
-        else:
-            raise ValueError(f"unsupported fragment_scf {fragment_scf}")
+        if scf_runner is not None:
+            mf = scf_runner(self, verbose=verbose, **kwargs)
+            if mf is None:
+                raise RuntimeError("fragment scf_runner must return a mean-field object")
+            self.mf = mf
+            return self.mf
 
-        mf.max_cycle = kwargs.pop('max_cycle', getattr(mf, 'max_cycle', 50))
-        mf.level_shift = kwargs.pop('level_shift', getattr(mf, 'level_shift', 0))
+        ncas = kwargs.pop('ncas', 5)
+        nelecas = kwargs.pop('nelecas', 7)
+        spin = kwargs.pop('cahf_spin', self.mol.spin)
+        avas_aolabels = kwargs.pop('avas_aolabels')
+        avas_threshold = kwargs.pop('avas_threshold', 0.5)
+        init_guess = kwargs.pop('init_guess', 'atom')
+        pre_scf_max_cycle = kwargs.pop('pre_scf_max_cycle', 0)
+        max_cycle = kwargs.pop('max_cycle', 200)
+        conv_tol = kwargs.pop('conv_tol', 1e-9)
+        level_shift = kwargs.pop('level_shift', 0)
 
-        if 'rdiis_imp_idx' in kwargs:
-            kwargs['rdiis_imp_idx'] = _resolve_indices(
-                kwargs['rdiis_imp_idx'], 'rdiis_imp_idx',
-                lambda labels: gto.mole._aolabels2baslst(self.mol, labels, base=0))
-        mf.diis = rdiis.RDIIS.setup(kwargs, self.fragment_imp_idx,
-                                    verbose < logger.INFO)
-
+        # These options are reserved for the embedded CAHF calculation.
+        for key in ('spin', 'diis', 'rdiis_imp_idx', 'rdiis_prop',
+                    'rdiis_power', 'rdiis_kernel', 'rdiis_mute',
+                    'rdiis_ent_conv_tol', 'rdiis_space', 'newton'):
+            kwargs.pop(key, None)
         if kwargs:
             raise TypeError(f"unknown fragment SCF options: {sorted(kwargs)}")
-        mf.kernel()
-        self.mf = mf
+
+        self.mf = cahf.CAHF_SOSCF(
+            self.mol, ncas=ncas, nelecas=nelecas, spin=spin,
+            avas_aolabels=avas_aolabels, avas_threshold=avas_threshold,
+            init_guess=init_guess, pre_scf_max_cycle=pre_scf_max_cycle,
+            max_cycle=max_cycle, conv_tol=conv_tol, level_shift=level_shift,
+            verbose=verbose,
+        )
+        return self.mf
 
     def build_bath(self, threshold=1e-13):
         """Construct bath orbitals from the fragment density matrix.
@@ -249,10 +236,16 @@ class FragmentMolecule:
         rearrange_idx = np.argsort(np.concatenate((imp_idx, env_idx)))
         cloes = cloes[rearrange_idx, :]
 
-        # Extract bath/fo/fv from environment part, convert to AO basis
+        # ``cloes`` columns are [embedded space | FO | FV].  The embedded
+        # space has nimp + nbath columns, so FO/FV must be offset by the full
+        # embedded-space size rather than by nbath alone.
         bath_orb = caolo[:, env_idx] @ cloes[nimp:, :nbath]
-        fo_orb = caolo[:, env_idx] @ cloes[nimp:, nbath:nbath + nfo]
-        fv_orb = caolo[:, env_idx] @ cloes[nimp:, nbath + nfo:]
+        fo_start = nimp + nbath
+        fv_start = fo_start + nfo
+        fo_orb = caolo[:, env_idx] @ cloes[nimp:, fo_start:fv_start]
+        fv_orb = caolo[:, env_idx] @ cloes[nimp:, fv_start:]
+        if bath_orb.shape[1] + fo_orb.shape[1] + fv_orb.shape[1] != len(env_idx):
+            raise RuntimeError('fragment bath/FO/FV orbitals do not span the environment')
         return bath_orb, fo_orb, fv_orb
 
     def orbitals_to_parent(self, frag_orb, nao):
@@ -423,7 +416,7 @@ def _fragment_density_to_parent_density(mol, fragment_mols):
 
     mask = imp_count > 0
     dm_parent[mask] = dm_imp_acc[mask] / imp_count[mask]
-    return (dm_parent + dm_parent.T.conj()) * 0.5
+    return dm_parent
 
 
 def _rescale_density_trace(dm, nelectron):
@@ -457,8 +450,8 @@ class FDMET(ssdmet.SSDMET):
     def __init__(self, mol, title='untitled',
                  imp_atoms=None, imp_charge=None,
                  ligand_atoms=None, ligand_charges=None,
-                 fragment_scf='cahf',
-                 fragment_scf_options=None, threshold=1e-13,
+                 fragment_scf_options=None, fragment_scf_runner=None,
+                 threshold=1e-13,
                  keep_fv_orbitals=False,
                  embedded_init_guess='aufbau',
                  embedded_active_aolabels=None,
@@ -466,10 +459,10 @@ class FDMET(ssdmet.SSDMET):
 
         self.imp_charge = imp_charge
         self.ligand_charges = None
-        self.fragment_scf = fragment_scf
         self.fragment_scf_options = (
             {} if fragment_scf_options is None else dict(fragment_scf_options)
         )
+        self.fragment_scf_runner = fragment_scf_runner
         self.keep_fv_orbitals = keep_fv_orbitals
         self.embedded_init_guess = embedded_init_guess
         self.embedded_active_aolabels = embedded_active_aolabels
@@ -547,7 +540,7 @@ class FDMET(ssdmet.SSDMET):
             charge = self.imp_charge + self.ligand_charges[ifrag]
             frag = self.make_fragment_mol(lig_atoms, charge=charge, verbose=verbose)
             scf_options = dict(self.fragment_scf_options)
-            frag.run_scf(fragment_scf=self.fragment_scf,verbose=verbose, **scf_options)
+            frag.run_scf(verbose=verbose, scf_runner=self.fragment_scf_runner, **scf_options)
             fragment_mols.append(frag)
             bath_orb, fo_orb, _ = frag.build_bath(threshold=self.threshold)
             bath_blocks.append(frag.orbitals_to_parent(bath_orb, self.mol.nao))
@@ -629,8 +622,8 @@ class FDMET(ssdmet.SSDMET):
         """Run the embedded SCF/CAHF to convergence.
 
         Dispatches ``kernel()`` appropriately:
-        - Newton / SOSCF: uses ``mo_coeff`` / ``mo_occ`` from ``es_mf``
-        - Standard CAHF: uses ``es_dm`` as density-matrix guess
+        - Newton / SOSCF (default): uses ``mo_coeff`` / ``mo_occ`` from ``es_mf``
+        - Standard CAHF (``newton=False``): uses ``es_dm`` as density-matrix guess
 
         Stores converged ``es_mf`` (Newton wraps the object) and
         ``es_occ``.
@@ -642,6 +635,8 @@ class FDMET(ssdmet.SSDMET):
                 mo_occ=self.es_mf.mo_occ)
         else:
             self.es_mf.kernel(self.es_dm)
+        if not self.es_mf.converged:
+            raise RuntimeError("embedded CAHF did not converge; refusing to rebuild from its density")
         self.es_occ = self.es_mf.mo_occ
 
     def do_rebuild(self, threshold=None):
@@ -673,7 +668,6 @@ class FDMET(ssdmet.SSDMET):
         mo = self.es_mf.mo_coeff
         mo_occ = self.es_mf.mo_occ
         dm_es = (mo * mo_occ) @ mo.T.conj()
-        dm_es = (dm_es + dm_es.T.conj()) * 0.5
 
         # Diagonalize environment block to re-classify bath / FO
         env_idx = list(range(nimp, self.nes))
@@ -720,7 +714,6 @@ class FDMET(ssdmet.SSDMET):
 
         # Project converged non-FO density into new embedded basis
         dm_es_new = T.T.conj() @ dm_es @ T
-        dm_es_new = (dm_es_new + dm_es_new.T.conj()) * 0.5
 
         # Diagonalize for CAHF MO structure
         ncas = self.fragment_scf_options['ncas']
@@ -736,7 +729,6 @@ class FDMET(ssdmet.SSDMET):
         mo_occ_new[:ncore] = 2
         mo_occ_new[ncore:ncore + ncas] = nelecas / ncas
         es_dm = (es_nat_orb * mo_occ_new) @ es_nat_orb.T.conj()
-        es_dm = (es_dm + es_dm.T.conj()) * 0.5
 
         # Store projected density for set_embedded_mf()
         self._rebuild_data = {
@@ -763,7 +755,6 @@ class FDMET(ssdmet.SSDMET):
         log = logger.new_logger(self, 4)
         log.info('')
         log.info('******** %s ********', self.__class__)
-        log.info('fragment scf = %s', self.fragment_scf)
         log.info('fragment scf options = %s', self.fragment_scf_options)
         log.info('embedded init guess = %s', self.embedded_init_guess)
         log.info('embedded active AO labels = %s',
@@ -842,9 +833,13 @@ class FDMET(ssdmet.SSDMET):
         self.validate_atom_partition()
 
         # Phase 1: Fragment loop
+        logger.info(self, '\n%s\nFDMET stage 1/4: fragment CAHF references and bath construction\n%s',
+                    '=' * 78, '=' * 78)
         self.fragment_mols, bath_blocks, fo_blocks = self.run_fragment_loop(verbose)
 
         # Phase 2: Global merge
+        logger.info(self, '\n%s\nFDMET stage 2/4: merge fragment bath/FO orbitals into the global space\n%s',
+                    '=' * 78, '=' * 78)
         raw_bath = np.hstack(bath_blocks)
         raw_fo = np.hstack(fo_blocks)
         c_imp, bath_orb, fo_orb, fv_orb = \
@@ -855,11 +850,15 @@ class FDMET(ssdmet.SSDMET):
             c_imp, bath_orb, fo_orb, fv_orb)
 
         # Phase 3: Embedded Hamiltonian + first CAHF
+        logger.info(self, '\n%s\nFDMET stage 3/4: first embedded CAHF\n%s',
+                    '=' * 78, '=' * 78)
         self.build_embedded_hamiltonian()
         self.set_embedded_mf()
         self.run_embedded_scf()
 
         # Phase 4: Rebuild from converged density + second CAHF
+        logger.info(self, '\n%s\nFDMET stage 4/4: rebuild and final embedded CAHF\n%s',
+                    '=' * 78, '=' * 78)
         self.do_rebuild()
         self.build_embedded_hamiltonian()
         self.set_embedded_mf()
@@ -894,7 +893,10 @@ class FDMET(ssdmet.SSDMET):
         es_mf.diis = rdiis.RDIIS.setup(scf_options, scf_options['rdiis_imp_idx'],
                                        self.verbose < logger.INFO)
 
-        newton = scf_options.pop('newton', False)
+        # The embedded space has a fixed active-orbital guess and no AO labels
+        # for AVAS.  Use CAHF's second-order Newton solver by default instead
+        # of the molecular CAHF_SOSCF wrapper used for fragment-local SCF.
+        newton = scf_options.pop('newton', True)
         es_mf._newton = newton
         # Discard SOSCF-specific keys (consumed by run_scf in fragment stage)
         scf_options.pop('avas_aolabels', None)
@@ -919,9 +921,6 @@ class FDMET(ssdmet.SSDMET):
         return es_mf
 
     def _embedded_cahf_initial_guess(self, ncas, nelecas, nelectron):
-        if self.embedded_init_guess != 'fragment_density':
-            es_dm = np.diag(self.es_occ)
-
         # Use rebuild projected density if available
         rebuild_data = getattr(self, '_rebuild_data', None)
         if rebuild_data is not None:
@@ -940,7 +939,27 @@ class FDMET(ssdmet.SSDMET):
         )
         s = self.mol.intor_symmetric('int1e_ovlp')
         dm_es = self.es_orb.T.conj() @ s @ dm_parent @ s @ self.es_orb
-        dm_es = (dm_es + dm_es.T.conj()) * 0.5
+
+        # Diagnose whether the stitched fragment density has the correct
+        # electron number and whether its occupied weight is represented by
+        # the global ES/FO/FV partition.  These orbitals together span the
+        # parent AO space, so their projected traces must sum to Tr(S D).
+        c_full = np.hstack((self.es_orb, self.fo_orb, self.fv_orb))
+        dm_full = c_full.T.conj() @ s @ dm_parent @ s @ c_full
+        n_parent = np.einsum('ij,ji->', s, dm_parent).real
+        n_es = np.trace(dm_es).real
+        n_fo = np.trace(dm_full[self.nes:self.nes + self.nfo,
+                                 self.nes:self.nes + self.nfo]).real
+        n_fv = np.trace(dm_full[self.nes + self.nfo:,
+                                 self.nes + self.nfo:]).real
+        metric_error = np.linalg.norm(c_full.T.conj() @ s @ c_full - np.eye(self.mol.nao))
+        logger.info(
+            self,
+            'fragment-density electron diagnostic: Tr(SD) %.12g; '
+            'ES %.12g; FO %.12g; FV %.12g; partition total %.12g; '
+            'metric error %.3g',
+            n_parent, n_es, n_fo, n_fv, n_es + n_fo + n_fv, metric_error)
+
         dm_es, trace_raw, trace_scale = _rescale_density_trace(
             dm_es, nelectron
         )
@@ -954,6 +973,11 @@ class FDMET(ssdmet.SSDMET):
             dm_es, ncas, nelecas, nelectron
         )
         self.es_init_guess_info['kind'] = 'fragment_density'
+        self.es_init_guess_info['n_parent'] = n_parent
+        self.es_init_guess_info['n_es'] = n_es
+        self.es_init_guess_info['n_fo'] = n_fo
+        self.es_init_guess_info['n_fv'] = n_fv
+        self.es_init_guess_info['metric_error'] = metric_error
         self.es_init_guess_info['trace_raw'] = trace_raw
         self.es_init_guess_info['trace_scale'] = trace_scale
         return mo_coeff, mo_occ, es_dm
@@ -1017,7 +1041,6 @@ class FDMET(ssdmet.SSDMET):
         mo_occ[:ncore] = 2
         mo_occ[ncore:ncore+ncas] = nelecas / ncas
         es_dm = (mo_coeff * mo_occ) @ mo_coeff.T.conj()
-        es_dm = (es_dm + es_dm.T.conj()) * 0.5
 
         self.es_occ = mo_occ
         self.es_init_guess_info = {

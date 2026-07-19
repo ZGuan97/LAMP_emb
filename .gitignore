@@ -164,3 +164,4 @@ cython_debug/
 test/
 .DS_Store
 *coding_log*
+examples/CoSPh4/
