@@ -26,3 +26,18 @@ mf.diis = rdiis.RDIIS(rdiis_prop='dS', imp_idx=mol.search_ao_label(['Co.*d']), p
 mf.max_cycle=200
 mf.level_shift = 0.5 # larger level shift should be used to improve convergence, especially when dealing with lanthanide systems
 mf.kernel()
+
+# SOSCF for CAHF, with initial guess 'atom'
+mf1 = scf.rohf.ROHF(mol).x2c()
+mf1.init_guess = 'atom' # don't ask why, it just works
+mf1.max_cycle=0
+mf1.kernel()
+
+ncas, nelec, mo = myavas.avas(mf1, ['Co 3d'], threshold=0.5)
+ncas, nelec = 5, 7
+occ = cahf.CAHF_get_occ(ncas, nelec)(mf1)
+
+mf2 = cahf.CAHF(mol, ncas=5, nelecas=7, spin=3).x2c().newton()
+mf2.max_cycle=200
+mf2.conv_tol = 1e-9
+mf2.kernel(mo, occ)
