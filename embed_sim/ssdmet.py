@@ -9,6 +9,7 @@ from pyscf import gto, scf, ao2mo
 from embed_sim.BNO_bath import get_RMP2_bath, get_UMP2_bath, get_ROMP2_bath
 from embed_sim import iao_helper
 from embed_sim import ic_helper
+from embed_sim import cahf
 
 import os
 
@@ -192,12 +193,15 @@ class SSDMET(lib.StreamObject):
     """
     single-shot DMET with impurity-environment partition
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, readmp2 = False, bath_option=None, verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, readmp2 = False, bath_option=None, verbose=logger.INFO, ncas=None, nelecas=None, spin=None):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory # TODO
         self.readmp2 = readmp2
+        self.ncas= ncas
+        self.nelecas = nelecas
+        self.spin = spin
         self.verbose = verbose # TODO
         self.log = lib.logger.new_logger(self.mol, self.verbose)
 
@@ -443,7 +447,10 @@ class SSDMET(lib.StreamObject):
             else:
                 pass
 
-        self.es_mf = self.ROHF()
+        if self.ncas is None:
+            self.es_mf = self.ROHF()
+        if self.ncas is not None:
+            self.es_mf = self.CAHF()
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -513,7 +520,38 @@ class SSDMET(lib.StreamObject):
             es_mf.e_tot = es_mf.energy_tot()
             self.es_occ = es_mf.mo_occ
         return es_mf
-    
+    def CAHF(self):
+        mol = gto.M()
+        mol.verbose = self.verbose
+        mol.incore_anyway = True
+        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.spin = self.mol.spin
+        es_mf = cahf.CAHF(mol,ncas=self.ncas,nelecas=self.nelecas,spin=self.spin).x2c()
+        es_mf.max_memory = self.max_mem
+        es_mf.mo_energy = np.zeros((self.nes))
+
+        es_ovlp = reduce(lib.dot, (self.es_orb.conj().T, self.mol.intor_symmetric('int1e_ovlp'), self.es_orb))
+        es_mf.get_hcore = lambda *args: self.es_int1e
+        es_mf.get_ovlp = lambda *args: es_ovlp
+        es_mf._eri = self.es_int2e
+        es_mf.conv_check = False
+        if self.es_natorb:
+            es_mf.mo_coeff = np.eye(self.nes)
+            es_mf.mo_energy = np.zeros((self.nes))
+            es_mf.mo_occ = self.es_occ
+            es_mf.e_tot = es_mf.energy_tot(dm=self.es_dm)
+        else:
+            es_fock = es_mf.get_fock(dm=self.es_dm)
+            mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+            mo_occ = np.zeros(self.nes)
+            mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+            es_mf.mo_energy = mo_energy
+            es_mf.mo_coeff = mo_coeff
+            es_mf.mo_occ = mo_occ
+            es_mf.e_tot = es_mf.energy_tot()
+            self.es_occ = es_mf.mo_occ
+        return es_mf
+
     def avas(self, aolabels, *args, **kwargs):
         from embed_sim import myavas
         total_mf = self.total_mf()
@@ -571,4 +609,4 @@ class SSDMET(lib.StreamObject):
             else:
                 with_df = self.mf_or_cas.with_df
         return DFSSDMET(self.mf_or_cas, self.title, imp_idx=self.imp_idx, threshold=self.threshold,
-                        with_df=with_df, es_natorb=self.es_natorb, bath_option=self.bath_option, verbose=self.verbose)
+                        with_df=with_df, es_natorb=self.es_natorb, bath_option=self.bath_option, verbose=self.verbose,ncas=self.ncas,nelecas=self.nelecas,spin=self.spin)

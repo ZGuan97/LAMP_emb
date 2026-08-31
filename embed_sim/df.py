@@ -38,15 +38,18 @@ class DFSSDMET(ssdmet.SSDMET):
     """
     Density fitting single-shot DMET class
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, with_df=None, es_natorb=True, readmp2 = False, bath_option=None, verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, readmp2=readmp2, threshold=1e-12, with_df=None, es_natorb=True, bath_option=None, verbose=logger.INFO,ncas=None,nelecas=None,spin=None):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory # TODO
-        self.readmp2 = readmp2
         self.verbose = verbose # TODO
         self.with_df = with_df
+        self.readmp2 = readmp2
         self.log = lib.logger.new_logger(self.mol, self.verbose)
+        self.ncas = ncas
+        self.nelecas = nelecas
+        self.spin = spin
 
         # inputs
         self.dm = None
@@ -250,7 +253,10 @@ class DFSSDMET(ssdmet.SSDMET):
             else:
                 pass
 
-        self.es_mf = self.ROHF()
+        if ncas is None:
+            self.es_mf = self.ROHF()
+        if ncas is not None:
+            self.es_mf = self.CAHF()
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -295,12 +301,43 @@ class DFSSDMET(ssdmet.SSDMET):
         es_mf.e_tot = es_mf.energy_tot()
         self.es_occ = es_mf.mo_occ
         return es_mf
-    
+    def CAHF(self):
+        mol = gto.M()
+        mol.verbose = self.verbose
+        mol.incore_anyway = True
+        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.spin = self.mol.spin
+
+        es_mf = cahf.CAHF(mol,ncas=self.ncas,nelecas=self.nelecas,spin=self.spin).x2c().density_fit()
+        es_mf.max_memory = self.max_mem
+        es_mf.mo_energy = np.zeros((self.nes))
+
+        es_ovlp = reduce(lib.dot, (self.es_orb.conj().T, self.mol.intor_symmetric('int1e_ovlp'), self.es_orb))
+        es_mf.get_hcore = lambda *args: self.es_int1e
+        es_mf.get_ovlp = lambda *args: es_ovlp
+        es_mf.with_df._cderi = self.es_cderi
+
+        # assume we only perfrom ROHF-in-ROHF embedding
+
+        # assert lib.einsum('ijj->', es_dm) == mol.nelectron
+        es_mf.level_shift = self.mf_or_cas.level_shift
+        es_mf.conv_check = False
+
+        es_fock = es_mf.get_fock(dm=self.es_dm)
+        mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+        mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+        es_mf.mo_energy = mo_energy
+        es_mf.mo_coeff = mo_coeff
+        es_mf.mo_occ = mo_occ
+        es_mf.e_tot = es_mf.energy_tot()
+        self.es_occ = es_mf.mo_occ
+        return es_mf
+
 class DFAODMET(aodmet.AODMET):
     """
     Density fitting single-shot AO-DMET class
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, with_df=None, es_natorb=True, bath_option=None, verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, with_df=None, es_natorb=True, bath_option=None, verbose=logger.INFO,ncas=None,nelecas=None,spin=None):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
@@ -308,6 +345,9 @@ class DFAODMET(aodmet.AODMET):
         self.verbose = verbose # TODO
         self.with_df = with_df
         self.log = lib.logger.new_logger(self.mol, self.verbose)
+        self.ncas = ncas
+        self.nelecas = nelecas
+        self.spin = spin
 
         # inputs
         self.dm = None
@@ -503,7 +543,10 @@ class DFAODMET(aodmet.AODMET):
             else:
                 pass
 
-        self.es_mf = self.ROHF()
+        if ncas is None:
+            self.es_mf = self.ROHF()
+        if ncas is not None:
+            self.es_mf = self.CAHF()
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -525,6 +568,37 @@ class DFAODMET(aodmet.AODMET):
             es_mf = scf.ROHF(mol).x2c().density_fit()
         else:
             es_mf = scf.RHF(mol).x2c().density_fit()
+        es_mf.max_memory = self.max_mem
+        es_mf.mo_energy = np.zeros((self.nes))
+
+        es_ovlp = reduce(lib.dot, (self.es_orb.conj().T, self.mol.intor_symmetric('int1e_ovlp'), self.es_orb))
+        es_mf.get_hcore = lambda *args: self.es_int1e
+        es_mf.get_ovlp = lambda *args: es_ovlp
+        es_mf.with_df._cderi = self.es_cderi
+
+        # assume we only perfrom ROHF-in-ROHF embedding
+
+        # assert lib.einsum('ijj->', es_dm) == mol.nelectron
+        es_mf.level_shift = self.mf_or_cas.level_shift
+        es_mf.conv_check = False
+
+        es_fock = es_mf.get_fock(dm=self.es_dm)
+        mo_energy, mo_coeff = es_mf.eig(es_fock, es_ovlp)
+        mo_occ = es_mf.get_occ(mo_energy, mo_coeff)
+        es_mf.mo_energy = mo_energy
+        es_mf.mo_coeff = mo_coeff
+        es_mf.mo_occ = mo_occ
+        es_mf.e_tot = es_mf.energy_tot()
+        self.es_occ = es_mf.mo_occ
+        return es_mf
+    def CAHF(self):
+        mol = gto.M()
+        mol.verbose = self.verbose
+        mol.incore_anyway = True
+        mol.nelectron = self.mf_or_cas.mol.nelectron - 2*self.nfo
+        mol.spin = self.mol.spin
+
+        es_mf = cahf.CAHF(mol,ncas=self.ncas,nelecas=self.nelecas,spin=self.spin).x2c().density_fit()
         es_mf.max_memory = self.max_mem
         es_mf.mo_energy = np.zeros((self.nes))
 

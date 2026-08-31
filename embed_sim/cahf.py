@@ -142,11 +142,11 @@ def CAHF_get_occ(ncas, nelecas):
         nopen = nocc - ncore
         # mo_occ = _fill_rohf_occ(mo_energy, mo_ea, mo_eb, ncore, nopen)
 
-        ncore = int((np.sum(np.array(mf.mol.nelec))-nelecas)/2)
-        mo_occ = np.zeros(mf.mol.nao)
+        ncore = int((np.sum(np.array(nelec))-nelecas)/2)
+        mo_occ = np.zeros(len(mo_ea))
         mo_occ[:ncore] = 2
         mo_occ[ncore:ncore+ncas] = nelecas/ncas
-
+        
         if mf.verbose >= logger.INFO and nocc < nmo and ncore > 0:
             ehomo = max(mo_energy[mo_occ> 0])
             elumo = min(mo_energy[mo_occ==0])
@@ -409,7 +409,7 @@ class CAHF(scf.rohf.ROHF):
         return init_guess_by_chkfile(self.mol, chkfile, project=project)
     
     def gen_response(self, mo_coeff=None, mo_occ=None,
-                      with_j=True, hermi=0, max_memory=None):
+                      with_j=True, hermi=0, max_memory=None,with_nlc=False):
         assert isinstance(self, CAHF)
         mol = self.mol
         f, a, b = self.frac, self.alpha, self.beta

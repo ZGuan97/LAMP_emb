@@ -92,13 +92,16 @@ class AODMET(ssdmet.SSDMET):
     """
     single-shot AO-DMET with impurity-environment partition
     """
-    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, bath_option=None, verbose=logger.INFO):
+    def __init__(self,mf_or_cas,title='untitled',imp_idx=None, threshold=1e-12, es_natorb=True, bath_option=None, verbose=logger.INFO, ncas=None, nelecas=None, spin=None):
         self.mf_or_cas = mf_or_cas
         self.mol = self.mf_or_cas.mol
         self.title = title
         self.max_mem = mf_or_cas.max_memory
         self.verbose = verbose
         self.log = lib.logger.new_logger(self.mol, self.verbose)
+        self.ncas = ncas
+        self.nelecas = nelecas
+        self.spin = spin
 
         # inputs
         self.dm = None
@@ -264,7 +267,10 @@ class AODMET(ssdmet.SSDMET):
             else:
                 pass
         
-        self.es_mf = self.ROHF()
+        if self.ncas is None:
+            self.es_mf = self.ROHF()
+        if self.ncas is not None:
+            self.es_mf = self.CAHF()
         self.fo_ene()
         self.log.info('')
         self.log.info(f'energy from frozen occupied orbitals = {self.fo_ene}')
@@ -293,4 +299,4 @@ class AODMET(ssdmet.SSDMET):
             else:
                 with_df = self.mf_or_cas.with_df
         return DFAODMET(self.mf_or_cas, self.title, imp_idx=self.imp_idx, threshold=self.threshold,
-                        with_df=with_df, es_natorb=self.es_natorb, bath_option=self.bath_option, verbose=self.verbose)
+                        with_df=with_df, es_natorb=self.es_natorb, bath_option=self.bath_option, verbose=self.verbose, ncas=self.ncas, nelecas=self.nelecas, spin=self.spin)
