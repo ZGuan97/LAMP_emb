@@ -203,6 +203,7 @@ class SSDMET(lib.StreamObject):
 
         # inputs
         self.dm = None
+        self.dm_pair = None
         self._imp_idx = []
         if imp_idx is not None:
             self.imp_idx = imp_idx
@@ -227,7 +228,12 @@ class SSDMET(lib.StreamObject):
         self.es_int2e = None
 
         self.es_mf = None
-
+        # added for extentions
+        self.caolo = None
+        self.cloao = None
+        self.lo_cloes = None
+        self.open_shell = None
+        
     def dump_flags(self):
         log = logger.new_logger(self, 4)
         log.info('')
@@ -318,6 +324,7 @@ class SSDMET(lib.StreamObject):
         self.dump_flags()
         dm = mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
+            self.dm_pair = dm
             self.dm = dm[0] + dm[1]
             open_shell = True
         else:
@@ -330,6 +337,11 @@ class SSDMET(lib.StreamObject):
             ldm, caolo, cloao = self.lowdin_orth(restore_imp, iaopao)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold, es_natorb=self.es_natorb)
+            self.caolo = caolo
+            self.cloao = cloao
+            self.lo_cloes = cloes
+            self.open_shell = open_shell
+
             caoes = lib.dot(caolo, cloes)
 
             self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
@@ -550,7 +562,7 @@ class SSDMET(lib.StreamObject):
             fo_ene += e_nuc
         self.fo_ene = fo_ene
         return fo_ene
-    
+      
     def density_fit(self, with_df=None):
         from embed_sim.df import DFSSDMET
         if with_df is None:

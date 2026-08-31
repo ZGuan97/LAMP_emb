@@ -50,6 +50,7 @@ class DFSSDMET(ssdmet.SSDMET):
 
         # inputs
         self.dm = None
+        self.dm_pair = None
         self._imp_idx = []
         if imp_idx is not None:
             self.imp_idx = imp_idx
@@ -130,6 +131,7 @@ class DFSSDMET(ssdmet.SSDMET):
         self.dump_flags()
         dm = ssdmet.mf_or_cas_make_rdm1s(self.mf_or_cas)
         if dm.ndim == 3: # ROHF density matrix have dimension (2, nao, nao)
+            self.dm_pair = dm
             self.dm = dm[0] + dm[1]
             open_shell = True
         else:
@@ -142,6 +144,10 @@ class DFSSDMET(ssdmet.SSDMET):
             ldm, caolo, cloao = self.lowdin_orth(restore_imp, iaopao)
 
             cloes, nimp, nbath, nfo, nfv, self.es_occ = ssdmet.build_embeded_subspace(ldm, self.imp_idx, thres=self.threshold)
+            self.caolo = caolo
+            self.cloao = cloao
+            self.lo_cloes = cloes
+            self.open_shell = open_shell
             caoes = caolo @ cloes
 
             self.fo_orb = caoes[:, nimp+nbath: nimp+nbath+nfo]
